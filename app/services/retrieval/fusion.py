@@ -1,4 +1,5 @@
 from typing import Any, Dict, List
+import torch
 from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue, SparseVector
@@ -9,20 +10,21 @@ COLLECTION_NAME = "ecs_knowledge_base"
 
 class HybridRetriever:
     def __init__(self, qdrant_host: str = "localhost", qdrant_port: int = 6333):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self.client = QdrantClient(host=qdrant_host, port=qdrant_port)
-        self.dense_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+        self.dense_model = SentenceTransformer("BAAI/bge-large-en-v1.5", device=device)
         self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
-        self.reranker = CrossEncoder("BAAI/bge-reranker-large")
+        # Ensure reranker uses GPU if available
+        self.reranker = CrossEncoder("BAAI/bge-reranker-large", device=device)
 
     def search(
         self,
         query: str,
         course_code: str,
         top_k: int = 3,
-        candidate_limit: int = 25,
+        candidate_limit: int = 10,  # Reduced from 25 to 10 for ~3x speedup
         rrf_k: int = 60,
     ) -> List[Dict[str, Any]]:
-        
         course_filter = Filter(
             must=[
                 FieldCondition(
@@ -32,7 +34,7 @@ class HybridRetriever:
             ]
         )
 
-        
+        # 1. Dense Search
         query_dense = self.dense_model.encode(
             query, normalize_embeddings=True
         ).tolist()
@@ -46,7 +48,7 @@ class HybridRetriever:
         )
         dense_results = dense_response.points
 
-        
+        # 2. Sparse Search
         query_sparse = list(self.sparse_model.embed([query]))[0]
         sparse_vector = SparseVector(
             indices=query_sparse.indices.tolist(),
@@ -62,20 +64,16 @@ class HybridRetriever:
         )
         sparse_results = sparse_response.points
 
-        
+        # 3. Reciprocal Rank Fusion (RRF)
         rrf_scores: Dict[str, float] = {}
         payload_map: Dict[str, Any] = {}
 
         for rank, hit in enumerate(dense_results):
-            rrf_scores[hit.id] = rrf_scores.get(hit.id, 0.0) + 1.0 / (
-                rrf_k + rank + 1
-            )
+            rrf_scores[hit.id] = rrf_scores.get(hit.id, 0.0) + 1.0 / (rrf_k + rank + 1)
             payload_map[hit.id] = hit.payload
 
         for rank, hit in enumerate(sparse_results):
-            rrf_scores[hit.id] = rrf_scores.get(hit.id, 0.0) + 1.0 / (
-                rrf_k + rank + 1
-            )
+            rrf_scores[hit.id] = rrf_scores.get(hit.id, 0.0) + 1.0 / (rrf_k + rank + 1)
             payload_map[hit.id] = hit.payload
 
         sorted_candidates = sorted(
@@ -85,12 +83,12 @@ class HybridRetriever:
         if not sorted_candidates:
             return []
 
-        
+        # 4. Cross-Encoder Reranking
         pairs = [
             [query, payload_map[doc_id]["text"]]
             for doc_id, _ in sorted_candidates
         ]
-        rerank_scores = self.reranker.predict(pairs)
+        rerank_scores = self.reranker.predict(pairs, batch_size=16)
 
         reranked_results = []
         for i, (doc_id, _) in enumerate(sorted_candidates):
@@ -99,9 +97,7 @@ class HybridRetriever:
                     "score": float(rerank_scores[i]),
                     "text": payload_map[doc_id]["text"],
                     "metadata": {
-                        k: v
-                        for k, v in payload_map[doc_id].items()
-                        if k != "text"
+                        k: v for k, v in payload_map[doc_id].items() if k != "text"
                     },
                 }
             )

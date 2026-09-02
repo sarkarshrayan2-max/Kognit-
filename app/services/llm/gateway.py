@@ -1,9 +1,12 @@
 import os
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, Iterator, List
+from dotenv import load_dotenv
 from groq import Groq
 from app.services.llm.prompts import SYSTEM_TEACHER_PROMPT, USER_PROMPT_TEMPLATE
-from dotenv import load_dotenv
+
 load_dotenv()
+
 
 class LLMGateway:
     def __init__(self, model_name: str = "qwen/qwen3.6-27b"):
@@ -13,9 +16,9 @@ class LLMGateway:
         self.client = Groq(api_key=api_key)
         self.model_name = model_name
 
-    def generate_answer(
+    def stream_answer(
         self, query: str, retrieved_chunks: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    ) -> Iterator[str]:
         context_parts = []
         for i, chunk in enumerate(retrieved_chunks):
             src = chunk.get("metadata", {}).get("source", "Unknown")
@@ -37,22 +40,11 @@ class LLMGateway:
                 {"role": "user", "content": user_message},
             ],
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=2048,
+            stream=True,
         )
 
-        answer_text = response.choices[0].message.content
-
-        citations = [
-            {
-                "source": c.get("metadata", {}).get("source"),
-                "page": c.get("metadata", {}).get("page"),
-                "score": round(c.get("score", 0.0), 4),
-            }
-            for c in retrieved_chunks
-        ]
-
-        return {
-            "answer": answer_text,
-            "citations": citations,
-            "model_used": self.model_name,
-        }
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta

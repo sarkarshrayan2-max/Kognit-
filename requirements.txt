@@ -10,3 +10,5 @@ groq
 langchain-text-splitters
 tavily-python
 langgraph
+streamlit
+requests
