@@ -22,7 +22,7 @@ class HybridRetriever:
         candidate_limit: int = 25,
         rrf_k: int = 60,
     ) -> List[Dict[str, Any]]:
-        # Enforce metadata pre-filtering by course
+        
         course_filter = Filter(
             must=[
                 FieldCondition(
@@ -32,7 +32,7 @@ class HybridRetriever:
             ]
         )
 
-        # 1. Dense Search using query_points
+        
         query_dense = self.dense_model.encode(
             query, normalize_embeddings=True
         ).tolist()
@@ -46,7 +46,7 @@ class HybridRetriever:
         )
         dense_results = dense_response.points
 
-        # 2. Sparse (BM25) Search using query_points
+        
         query_sparse = list(self.sparse_model.embed([query]))[0]
         sparse_vector = SparseVector(
             indices=query_sparse.indices.tolist(),
@@ -62,7 +62,7 @@ class HybridRetriever:
         )
         sparse_results = sparse_response.points
 
-        # 3. Reciprocal Rank Fusion (RRF)
+        
         rrf_scores: Dict[str, float] = {}
         payload_map: Dict[str, Any] = {}
 
@@ -85,7 +85,7 @@ class HybridRetriever:
         if not sorted_candidates:
             return []
 
-        # 4. Cross-Encoder Reranking
+        
         pairs = [
             [query, payload_map[doc_id]["text"]]
             for doc_id, _ in sorted_candidates

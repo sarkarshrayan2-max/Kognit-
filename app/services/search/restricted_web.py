@@ -31,7 +31,7 @@ class RestrictedWebSearch:
             for item in response.get("results", []):
                 web_chunks.append(
                     {
-                        "score": 0.50,  # Baseline fallback score
+                        "score": 0.50, 
                         "text": item.get("content", ""),
                         "metadata": {
                             "source": item.get("url", "Web Search"),

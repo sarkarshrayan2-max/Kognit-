@@ -7,7 +7,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 @router.post("", response_model=ChatResponse)
 def chat_endpoint(payload: ChatRequest):
-    # Initialize state
+    
     initial_state = {
         "query": payload.query,
         "course_code": payload.course_code,
@@ -21,7 +21,7 @@ def chat_endpoint(payload: ChatRequest):
     }
 
     try:
-        # Run execution through LangGraph
+        
         result = kognit_graph.invoke(initial_state)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Graph execution failed: {str(e)}")
