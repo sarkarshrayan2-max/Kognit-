@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pymupdf
+qdrant-client
+sentence-transformers
+fastembed 
+pydantic
+python-dotenv
+groq
+langchain-text-splitters
+tavily-python
+langgraph
