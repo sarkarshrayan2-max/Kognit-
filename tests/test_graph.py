@@ -3,8 +3,8 @@ load_dotenv()
 from app.services.rag.retriever import kognit_graph
 
 inputs = {
-    "query": "What is the meaning of food addictive ?",
-    "course_code": "COA",
+    "query": "What is Scheduling ?",
+    "course_code": "DBMS",
     "top_k": 3,
     "local_chunks": [],
     "final_context": [],
