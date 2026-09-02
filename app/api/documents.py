@@ -28,7 +28,7 @@ async def upload_document(
     finally:
         file.file.close()
 
-    # 2. Hand over to DocumentIndexer
+    
     try:
         chunks_indexed = indexer.index_pdf(
             pdf_path=file_path,
