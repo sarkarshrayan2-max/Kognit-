@@ -22,7 +22,6 @@ condenser = QueryCondenser()
 async def chat_stream_endpoint(payload: ChatRequest):
     session_id = payload.session_id or "default_session"
 
-    # 1. Check server memory first; fall back to payload.history from client
     server_history = session_manager.get_context(
         session_id=session_id,
         current_course=payload.course_code
@@ -32,7 +31,6 @@ async def chat_stream_endpoint(payload: ChatRequest):
         for m in (payload.history or [])
     ]
     
-    # Unified history resolution
     history = server_history if server_history else payload_history
 
     logger.info(
@@ -40,7 +38,6 @@ async def chat_stream_endpoint(payload: ChatRequest):
         session_id, payload.course_code, len(history)
     )
 
-    # 2. Dynamic JSON intent classification & query condensation (no hardcoded keywords)
     intent, standalone_query = condenser.analyze(
         query=payload.query,
         history=history,
@@ -48,7 +45,6 @@ async def chat_stream_endpoint(payload: ChatRequest):
     )
     logger.info("Intent: %s | Raw: '%s' -> Standalone: '%s'", intent, payload.query, standalone_query)
 
-    # Short-circuit conversational filler without querying Qdrant/Tavily
     if intent == "CONVERSATIONAL":
         async def conversational_generator() -> AsyncIterator[str]:
             ack = "Understood! Let me know if you want to explore more examples or dive into another topic."
@@ -75,14 +71,12 @@ async def chat_stream_endpoint(payload: ChatRequest):
             },
         )
 
-    # 3. Hybrid search (dense + sparse BM25)
     candidates = retriever.search(
         query=standalone_query,
         course_code=payload.course_code,
         top_k=payload.top_k or 3,
     )
 
-    # 4. CRAG validation & routing with course context
     decision, final_context = crag.evaluate_and_route(
         query=standalone_query,
         local_chunks=candidates,
