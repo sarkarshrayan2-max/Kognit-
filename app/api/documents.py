@@ -1,48 +1,147 @@
-import uuid
+import hashlib
 import logging
-import shutil
+import os
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, status
-from pydantic import BaseModel
+from typing import Dict, Any
 
-from app.services.ingestion.indexer import DocumentIndexer
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    HTTPException,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
 
-router = APIRouter(prefix="/documents", tags=["Documents"])
+from app.services.ingestion.indexer import (
+    DocumentIndexer,
+)
+
+router = APIRouter(
+    prefix="/documents",
+    tags=["Documents"],
+)
+
 logger = logging.getLogger("kognit.documents")
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+MAX_UPLOAD_SIZE = 25 * 1024 * 1024
+
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+}
+
+INGESTION_JOBS: Dict[str, Dict[str, Any]] = {}
+
 indexer = DocumentIndexer()
 
-UPLOAD_DIR = Path("storage/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Ephemeral Job Tracker for MVP (Transition to PostgreSQL in production)
-INGESTION_JOBS: Dict[str, Dict[str, Any]] = {}
+
+
+def calculate_sha256(file_path: Path) -> str:
+
+    sha256 = hashlib.sha256()
+
+    with open(file_path, "rb") as f:
+
+        while True:
+
+            chunk = f.read(1024 * 1024)
+
+            if not chunk:
+                break
+
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def safe_filename(filename: str) -> str:
+
+    filename = Path(filename).name
+
+    filename = re.sub(
+        r"[^a-zA-Z0-9._-]",
+        "_",
+        filename,
+    )
+
+    return filename
+
+
+
 
 def process_pdf_background(
     job_id: str,
-    stored_path: Path,
+    pdf_path: str,
     original_filename: str,
     course_code: str,
     unit: int,
-    visibility: str
+    visibility: str,
 ):
-    INGESTION_JOBS[job_id]["status"] = "PROCESSING"
+
     try:
-        chunks = indexer.index_pdf(
-            pdf_path=stored_path,
+
+        INGESTION_JOBS[job_id] = {
+            "status": "processing",
+            "filename": original_filename,
+            "course_code": course_code,
+        }
+
+        result = indexer.index_pdf(
+            pdf_path=pdf_path,
             course_code=course_code,
             unit=unit,
-            visibility=visibility
+            visibility=visibility,
+            original_filename=original_filename,
         )
-        INGESTION_JOBS[job_id]["status"] = "INDEXED"
-        INGESTION_JOBS[job_id]["chunks_indexed"] = chunks
-        logger.info("Indexed %s successfully (%d chunks)", original_filename, chunks)
-    except Exception as e:
-        INGESTION_JOBS[job_id]["status"] = "FAILED"
-        INGESTION_JOBS[job_id]["error"] = str(e)
-        logger.error("Ingestion failed for %s: %s", original_filename, e, exc_info=True)
 
-@router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
+        if result["status"] == "duplicate":
+
+            try:
+                os.remove(pdf_path)
+            except OSError:
+                pass
+
+            INGESTION_JOBS[job_id] = {
+                "status": "duplicate",
+                **result,
+            }
+
+            return
+
+        INGESTION_JOBS[job_id] = {
+            "status": "completed",
+            **result,
+        }
+
+    except Exception as exc:
+
+        logger.exception(
+            "PDF ingestion failed"
+        )
+
+        try:
+            os.remove(pdf_path)
+        except OSError:
+            pass
+
+        INGESTION_JOBS[job_id] = {
+            "status": "failed",
+            "error": str(exc),
+        }
+
+
+
+
+@router.post("/upload")
 async def upload_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -50,70 +149,249 @@ async def upload_document(
     unit: int = Form(...),
     visibility: str = Form("global"),
 ):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    # Prevent directory traversal attacks
-    safe_basename = Path(file.filename).name
-    unique_disk_name = f"{uuid.uuid4().hex[:8]}_{safe_basename}"
-    destination_path = UPLOAD_DIR / unique_disk_name
+    original_filename = safe_filename(
+        file.filename or "document.pdf"
+    )
 
-    try:
-        with open(destination_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    finally:
-        file.file.close()
+    extension = Path(
+        original_filename
+    ).suffix.lower()
 
-    job_id = str(uuid.uuid4())
+    if extension not in ALLOWED_EXTENSIONS:
+
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are allowed.",
+        )
+
+    
+
+    content = await file.read()
+
+    if len(content) > MAX_UPLOAD_SIZE:
+
+        raise HTTPException(
+            status_code=413,
+            detail="Maximum PDF size is 25 MB.",
+        )
+
+    
+
+    if not content.startswith(b"%PDF"):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid PDF.",
+        )
+
+    
+
+    content_hash = hashlib.sha256(
+        content
+    ).hexdigest()
+
+    if indexer.document_exists(
+        content_hash=content_hash,
+        course_code=course_code,
+    ):
+
+        raise HTTPException(
+            status_code=409,
+            detail="This document is already indexed for this course.",
+        )
+
+    
+
+    job_id = hashlib.sha256(
+        f"{content_hash}:{course_code}".encode()
+    ).hexdigest()[:16]
+
+    stored_filename = (
+        f"{job_id}_{original_filename}"
+    )
+
+    pdf_path = (
+        UPLOAD_DIR / stored_filename
+    )
+
+    
+
+    with open(pdf_path, "wb") as f:
+        f.write(content)
+
     INGESTION_JOBS[job_id] = {
-        "job_id": job_id,
-        "filename": safe_basename,
-        "stored_as": unique_disk_name,
+        "status": "queued",
+        "filename": original_filename,
+        "stored_filename": stored_filename,
         "course_code": course_code.upper(),
         "unit": unit,
-        "status": "QUEUED",
-        "chunks_indexed": 0
     }
 
     
+
     background_tasks.add_task(
         process_pdf_background,
-        job_id=job_id,
-        stored_path=destination_path,
-        original_filename=safe_basename,
-        course_code=course_code,
-        unit=unit,
-        visibility=visibility
+        job_id,
+        str(pdf_path),
+        original_filename,
+        course_code,
+        unit,
+        visibility,
     )
 
     return {
-        "status": "accepted",
+        "status": "queued",
         "job_id": job_id,
-        "filename": safe_basename,
-        "message": "File received. Processing in background."
+        "filename": original_filename,
+        "course_code": course_code.upper(),
     }
 
+
+
+
 @router.get("/jobs/{job_id}")
-async def get_job_status(job_id: str):
+def get_ingestion_job(
+    job_id: str,
+):
+
     job = INGESTION_JOBS.get(job_id)
+
     if not job:
-        raise HTTPException(status_code=404, detail="Job ID not found.")
+
+        raise HTTPException(
+            status_code=404,
+            detail="Ingestion job not found.",
+        )
+
     return job
 
+
+
+
 @router.get("")
-async def list_documents(course_code: Optional[str] = Query(None)):
-    try:
-        docs = indexer.get_indexed_documents(course_code=course_code)
-        return {"status": "success", "total_documents": len(docs), "documents": docs}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+def list_documents():
+
+    documents = (
+        indexer.get_indexed_documents()
+    )
+
+    return {
+        "documents": documents,
+        "count": len(documents),
+    }
+
+
+
+
+@router.get("/files/{document_id}")
+def serve_document(
+    document_id: str,
+):
+
+    points, _ = indexer.client.scroll(
+        collection_name=indexer.collection_name,
+        scroll_filter={
+            "must": [
+                {
+                    "key": "document_id",
+                    "match": {
+                        "value": document_id
+                    },
+                }
+            ]
+        },
+        limit=1,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    if not points:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    payload = points[0].payload or {}
+
+    stored_filename = payload.get(
+        "stored_filename"
+    )
+
+    original_filename = payload.get(
+        "original_filename",
+        payload.get(
+            "source",
+            "document.pdf",
+        ),
+    )
+
+    if not stored_filename:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Stored PDF information is unavailable.",
+        )
+
+    stored_filename = Path(
+        stored_filename
+    ).name
+
+    pdf_path = (
+        UPLOAD_DIR / stored_filename
+    ).resolve()
+
+    upload_root = (
+        UPLOAD_DIR
+        .resolve()
+    )
+
+    
+    if upload_root not in pdf_path.parents:
+
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid document path.",
+        )
+
+    if not pdf_path.exists():
+
+        raise HTTPException(
+            status_code=404,
+            detail="PDF file is no longer available on the server.",
+        )
+
+    return FileResponse(
+        path=str(pdf_path),
+        media_type="application/pdf",
+        filename=original_filename,
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{safe_filename(original_filename)}"'
+            )
+        },
+    )
+
+
+
 
 @router.delete("")
-async def delete_document(
-    source: str = Query(...), 
-    course_code: Optional[str] = Query(None)
+def delete_document(
+    source: str,
+    course_code: str,
 ):
-    result = indexer.delete_by_source(source_filename=source, course_code=course_code)
+
+    result = indexer.delete_by_source(
+        source_filename=source,
+        course_code=course_code,
+    )
+
     if result["status"] == "not_found":
-        raise HTTPException(status_code=404, detail=result["message"])
+
+        raise HTTPException(
+            status_code=404,
+            detail=result["message"],
+        )
+
     return result

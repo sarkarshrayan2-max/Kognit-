@@ -425,6 +425,23 @@
             background: var(--bg);
         }
 
+        .source-chip {
+            transition: border-color .15s ease, background .15s ease;
+        }
+
+        .source-chip.course-source {
+            border-color: var(--border);
+        }
+
+        .source-chip.web-source {
+            border-style: dashed;
+        }
+
+        .source-location {
+            color: var(--ink-faint);
+            font-size: 11px;
+        }
+
         .source-chip .num {
             width: 16px;
             height: 16px;
@@ -756,6 +773,33 @@
         .panel-body {
             padding: 20px;
             overflow-y: auto;
+        }
+
+        .citation-detail-type {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--ink-faint);
+            margin-bottom: 8px;
+        }
+
+        .citation-open-link {
+            display: inline-block;
+            margin-top: 18px;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            color: var(--ink);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .citation-open-link:hover {
+            background: var(--bg);
+            border-color: var(--ink-faint);
         }
 
         .panel-title {
@@ -1193,25 +1237,73 @@
             }
         }
 
+        function resolveCitationUrl(url) {
+            if (!url) return "";
+            if (/^https?:\/\//i.test(url)) return url;
+            return `${BACKEND_URL}${url.startsWith("/") ? "" : "/"}${url}`;
+        }
+
         function renderCitationChips(container, citations) {
             container.innerHTML = "";
+
+            if (!Array.isArray(citations) || citations.length === 0) {
+                return;
+            }
+
             citations.forEach((cite, idx) => {
-                const chip = document.createElement('div');
-                chip.className = 'source-chip';
-                chip.innerHTML = `<span class="num">${idx + 1}</span>${escapeHtml(cite.source || 'Doc')} (p. ${cite.page})`;
-                chip.addEventListener('click', () => openPanel(cite));
+                const chip = document.createElement("div");
+                const sourceType = (cite.source_type || "course").toLowerCase();
+                const isWeb = sourceType === "web";
+                const label = isWeb ? "Web" : `p. ${cite.page ?? "?"}`;
+
+                chip.className = `source-chip ${isWeb ? "web-source" : "course-source"}`;
+                chip.innerHTML = `
+                    <span class="num">${idx + 1}</span>
+                    <span>${escapeHtml(cite.source || "Unknown source")}</span>
+                    <span class="source-location">${escapeHtml(label)}</span>
+                `;
+
+                chip.addEventListener("click", () => openPanel(cite));
                 container.appendChild(chip);
             });
         }
 
         function openPanel(citation) {
+            const sourceType = (citation.source_type || "course").toLowerCase();
+            const isWeb = sourceType === "web";
+            const sourceLabel = isWeb ? "External Web Source" : "Course Document";
+            const pageText = isWeb ? "External source" : `Page ${citation.page ?? "?"}`;
+            const resolvedUrl = resolveCitationUrl(citation.url || "");
+
+            let externalLink = "";
+
+            if (resolvedUrl) {
+                const linkText = isWeb
+                    ? "Open external source ↗"
+                    : `Open PDF — Page ${citation.page ?? "?"} ↗`;
+
+                externalLink = `
+                    <a
+                        class="citation-open-link"
+                        href="${escapeAttribute(resolvedUrl)}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        ${escapeHtml(linkText)}
+                    </a>
+                `;
+            }
+
             panelBody.innerHTML = `
-      <div class="panel-title">${escapeHtml(citation.source || 'Course Material')}</div>
-      <div class="panel-meta">Page ${citation.page} • Reranker Confidence: ${(citation.score * 100).toFixed(1)}%</div>
-      <div class="panel-excerpt">${escapeHtml(citation.excerpt || 'No excerpt available.')}</div>
-    `;
-            panel.classList.add('open');
-            panelOverlay.classList.add('open');
+                <div class="citation-detail-type">${escapeHtml(sourceLabel)}</div>
+                <div class="panel-title">${escapeHtml(citation.source || "Unknown source")}</div>
+                <div class="panel-meta">${escapeHtml(pageText)}</div>
+                <div class="panel-excerpt">${escapeHtml(citation.excerpt || "No excerpt available.")}</div>
+                ${externalLink}
+            `;
+
+            panel.classList.add("open");
+            panelOverlay.classList.add("open");
         }
 
         function closePanel() {
@@ -1358,8 +1450,17 @@
         });
 
         function escapeHtml(str) {
-            if (!str) return "";
-            return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            if (str === null || str === undefined) return "";
+            return String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function escapeAttribute(value) {
+            return escapeHtml(value);
         }
     </script>
 </body>

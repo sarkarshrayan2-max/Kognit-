@@ -58,30 +58,108 @@ def retrieve_node(state: GraphState) -> Dict[str, Any]:
     )
     return {"local_chunks": chunks}
 
-def crag_eval_node(state: GraphState) -> Dict[str, Any]:
-    decision, routed_context = crag_evaluator.evaluate_and_route(
-        query=state["standalone_query"],
-        local_chunks=state.get("local_chunks", []),
-        course_code=state["course_code"]
+def crag_eval_node(state):
+
+    decision, routed_context = (
+        crag_evaluator.evaluate_and_route(
+            state.get("local_chunks", []),
+            state["query"],
+            state["course_code"],
+        )
     )
-    
-    citations = [
-        {
-            "source": c.get("metadata", {}).get("source", "Course Document"),
-            "page": c.get("metadata", {}).get("page", "?"),
-            "score": round(c.get("score", 0.0), 4),
-            "excerpt": c.get("text", "")[:400] + ("..." if len(c.get("text", "")) > 400 else "")
-        }
-        for c in routed_context
-    ]
-    
+
+    citations = []
+
+    for chunk in routed_context:
+
+        metadata = chunk.get(
+            "metadata",
+            {},
+        )
+
+        source_type = metadata.get(
+            "source_type",
+            "course",
+        )
+
+        page = metadata.get(
+            "page",
+            "?",
+        )
+
+        document_id = metadata.get(
+            "document_id",
+            "",
+        )
+
+        source = metadata.get(
+            "source",
+            "Course Document",
+        )
+
+        url = ""
+
+        
+
+        if source_type == "course":
+
+            if document_id:
+
+                url = (
+                    f"/documents/files/"
+                    f"{document_id}"
+                    f"#page={page}"
+                )
+
+        
+        elif source_type == "web":
+
+            url = metadata.get(
+                "url",
+                "",
+            )
+
+        citations.append(
+            {
+                "source": source,
+                "page": page,
+                "score": round(
+                    float(
+                        chunk.get(
+                            "score",
+                            0.0,
+                        )
+                    ),
+                    4,
+                ),
+                "excerpt": (
+                    chunk.get(
+                        "text",
+                        "",
+                    )[:400]
+                    + (
+                        "..."
+                        if len(
+                            chunk.get(
+                                "text",
+                                "",
+                            )
+                        ) > 400
+                        else ""
+                    )
+                ),
+                "source_type": source_type,
+                "document_id": document_id,
+                "url": url,
+            }
+        )
+
     return {
         "response_type": "TECHNICAL",
         "crag_decision": decision,
         "final_context": routed_context,
-        "citations": citations
+        "citations": citations,
     }
-
 
 def route_by_intent(state: GraphState) -> str:
     return "handle_conversational" if state["intent"] == "CONVERSATIONAL" else "execute_retrieval"

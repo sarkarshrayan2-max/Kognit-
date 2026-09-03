@@ -88,6 +88,7 @@ async def chat_stream_endpoint(payload: ChatRequest):
                 query=payload.query,
                 retrieved_chunks=final_context,
                 history=history,
+                crag_decision=decision,
             ):
                 if token:
                     accumulated_answer.append(token)
