@@ -1,10 +1,11 @@
-import os
-import shutil
+import uuid
 import logging
+import shutil
 from pathlib import Path
-from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, status
+from typing import Any, Dict, Optional
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query, status
 from pydantic import BaseModel
+
 from app.services.ingestion.indexer import DocumentIndexer
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
@@ -14,18 +15,36 @@ indexer = DocumentIndexer()
 UPLOAD_DIR = Path("storage/uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# Ephemeral Job Tracker for MVP (Transition to PostgreSQL in production)
+INGESTION_JOBS: Dict[str, Dict[str, Any]] = {}
 
-class DeleteDocumentResponse(BaseModel):
-    source: str
-    course_code: Optional[str] = None
-    chunks_deleted: int
-    file_deleted_from_disk: bool
-    status: str
-    message: str
+def process_pdf_background(
+    job_id: str,
+    stored_path: Path,
+    original_filename: str,
+    course_code: str,
+    unit: int,
+    visibility: str
+):
+    INGESTION_JOBS[job_id]["status"] = "PROCESSING"
+    try:
+        chunks = indexer.index_pdf(
+            pdf_path=stored_path,
+            course_code=course_code,
+            unit=unit,
+            visibility=visibility
+        )
+        INGESTION_JOBS[job_id]["status"] = "INDEXED"
+        INGESTION_JOBS[job_id]["chunks_indexed"] = chunks
+        logger.info("Indexed %s successfully (%d chunks)", original_filename, chunks)
+    except Exception as e:
+        INGESTION_JOBS[job_id]["status"] = "FAILED"
+        INGESTION_JOBS[job_id]["error"] = str(e)
+        logger.error("Ingestion failed for %s: %s", original_filename, e, exc_info=True)
 
-
-@router.post("/upload")
+@router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     course_code: str = Form(...),
     unit: int = Form(...),
@@ -34,116 +53,67 @@ async def upload_document(
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    file_path = UPLOAD_DIR / file.filename
+    # Prevent directory traversal attacks
+    safe_basename = Path(file.filename).name
+    unique_disk_name = f"{uuid.uuid4().hex[:8]}_{safe_basename}"
+    destination_path = UPLOAD_DIR / unique_disk_name
+
     try:
-        with open(file_path, "wb") as buffer:
+        with open(destination_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     finally:
         file.file.close()
 
-    try:
-        chunks_indexed = indexer.index_pdf(
-            pdf_path=file_path,
-            course_code=course_code,
-            unit=unit,
-            visibility=visibility,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
-
-    return {
-        "status": "success",
-        "filename": file.filename,
+    job_id = str(uuid.uuid4())
+    INGESTION_JOBS[job_id] = {
+        "job_id": job_id,
+        "filename": safe_basename,
+        "stored_as": unique_disk_name,
         "course_code": course_code.upper(),
         "unit": unit,
-        "chunks_indexed": chunks_indexed,
+        "status": "QUEUED",
+        "chunks_indexed": 0
     }
 
-
-@router.delete(
-    "",
-    response_model=DeleteDocumentResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Delete all indexed vectors and stored files for a document",
-)
-async def delete_document_endpoint(
-    source: str = Query(
-        ...,
-        description="Exact filename as stored in metadata (e.g., 'Sample_COA.pdf')",
-        example="Sample_COA.pdf",
-    ),
-    course_code: Optional[str] = Query(
-        None,
-        description="Optional course code filter (e.g., 'COA', 'DBMS')",
-        example="COA",
-    ),
-):
-    try:
-        # 1. Delete vector points from Qdrant
-        result = indexer.delete_by_source(
-            source_filename=source, 
-            course_code=course_code
-        )
-
-        if result["status"] == "not_found":
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=result["message"],
-            )
-
-        # 2. Clean up physical file in storage/uploads if present
-        disk_file = UPLOAD_DIR / source
-        file_removed = False
-        if disk_file.exists() and disk_file.is_file():
-            try:
-                disk_file.unlink()
-                file_removed = True
-            except OSError as fs_err:
-                logger.warning("Could not delete file %s from disk: %s", disk_file, fs_err)
-
-        logger.info(
-            "Purged document '%s' from Qdrant (%d chunks) | Disk file removed: %s",
-            source, result["deleted"], file_removed
-        )
-
-        return DeleteDocumentResponse(
-            source=source,
-            course_code=course_code,
-            chunks_deleted=result["deleted"],
-            file_deleted_from_disk=file_removed,
-            status=result["status"],
-            message=result["message"],
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Failed to delete document '%s': %s", source, str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error during deletion: {str(e)}",
-        )
-@router.get(
-    "",
-    summary="List all indexed documents grouped with chunk counts",
-)
-async def list_documents_endpoint(
-    course_code: Optional[str] = Query(
-        None,
-        description="Optional filter by course code",
-        example="DBMS",
+    
+    background_tasks.add_task(
+        process_pdf_background,
+        job_id=job_id,
+        stored_path=destination_path,
+        original_filename=safe_basename,
+        course_code=course_code,
+        unit=unit,
+        visibility=visibility
     )
-):
+
+    return {
+        "status": "accepted",
+        "job_id": job_id,
+        "filename": safe_basename,
+        "message": "File received. Processing in background."
+    }
+
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    job = INGESTION_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job ID not found.")
+    return job
+
+@router.get("")
+async def list_documents(course_code: Optional[str] = Query(None)):
     try:
-        documents = indexer.get_indexed_documents(course_code=course_code)
-        return {
-            "status": "success",
-            "total_documents": len(documents),
-            "documents": documents,
-        }
+        docs = indexer.get_indexed_documents(course_code=course_code)
+        return {"status": "success", "total_documents": len(docs), "documents": docs}
     except Exception as e:
-        logger.error("Failed to list indexed documents: %s", str(e), exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to query knowledge base: {str(e)}",
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("")
+async def delete_document(
+    source: str = Query(...), 
+    course_code: Optional[str] = Query(None)
+):
+    result = indexer.delete_by_source(source_filename=source, course_code=course_code)
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail=result["message"])
+    return result

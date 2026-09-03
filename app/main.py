@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.chat import router as chat_router
 from app.api.documents import router as doc_router
-from app.api.chat import retriever  
-
+from app.graph.workflow import retriever
+from app.graph.workflow import retriever
 logger = logging.getLogger("kognit.gateway")
 
 @asynccontextmanager
