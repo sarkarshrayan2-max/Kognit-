@@ -1,87 +1,130 @@
+import json
+import logging
 import os
-from typing import List, Dict, Tuple
-from groq import Groq
+import re
+from typing import Dict, List, Tuple
 from dotenv import load_dotenv
+from groq import Groq
 
 load_dotenv()
+logger = logging.getLogger("kognit.condenser")
 
-INTENT_AND_CONDENSE_PROMPT = """You are the conversational controller for KOGNIT, an academic assistant for Electronics and Computer Science (ECS).
+CONDENSE_SYSTEM_PROMPT = """You are the conversational controller and search query formulator for KOGNIT, an academic AI assistant for Electronics and Computer Science (ECS) engineering.
 
-Given the recent chat history and the student's latest message:
-1. Classify the intent into one of two types:
-   - "CONVERSATIONAL": Acknowledgements, greetings, filler ("ok", "okay", "thanks", "got it", "cool", "hello", "understood").
-   - "TECHNICAL": Questions, requests for examples, requests to re-explain a topic, or follow-ups.
-2. If CONVERSATIONAL, output:
-   INTENT: CONVERSATIONAL
-   QUERY: NONE
-3. If TECHNICAL, rewrite the query into an independent technical search query targeting the course "{course_code}".
-   - If the user says "explain again", "elaborate", or "give an example", find the LAST technical subject discussed in the history and form: "[Subject] detailed explanation and examples".
-   - Never search for literal terms like "ok", "explain", or "again".
-   Output:
-   INTENT: TECHNICAL
-   QUERY: <standalone query here>
+Analyze the conversation history and the student's latest turn to classify intent and formulate a standalone query.
 
-Course: {course_code}
+### Classification Rules:
+1. "CONVERSATIONAL": Pure acknowledgments, greetings, closures, or casual filler (e.g., "ok", "thanks", "got it", "hello", "understood").
+   - Set "intent": "CONVERSATIONAL"
+   - Set "standalone_query": null
 
-Chat History:
-{chat_history}
+2. "TECHNICAL": The student is asking a technical question, requesting an example, or asking for clarification/re-explanation (e.g., "explain again", "why is that?", "give an example", "can you clarify?").
+   - Set "intent": "TECHNICAL"
+   - Set "standalone_query": Formulate a complete, self-contained search query. Identify the technical topic from the immediate conversation history and state it clearly with relevant engineering terms. Never output conversational words ("again", "explain", "please") as the query.
 
-Student Question: {question}
-"""
+### Examples:
+Example 1:
+Input:
+Course: DBMS
+History:
+User: What is an Inner Join?
+Assistant: An Inner Join combines matching rows...
+Latest Turn: explain again
+Output:
+{"intent": "TECHNICAL", "standalone_query": "Inner Join definition mechanism and examples in DBMS"}
+
+Example 2:
+Input:
+Course: DBMS
+History:
+User: What is universal quantifiers, existential quantifier and free and bound variable?
+Assistant: The universal quantifier (forall) requires all tuples...
+Latest Turn: can you give an example of the first one?
+Output:
+{"intent": "TECHNICAL", "standalone_query": "Universal quantifier in relational calculus detailed examples and syntax"}
+
+Example 3:
+Input:
+Course: COA
+History:
+User: How does Booth's algorithm handle negative multipliers?
+Assistant: Booth's algorithm examines bit pairs...
+Latest Turn: thanks got it!
+Output:
+{"intent": "CONVERSATIONAL", "standalone_query": null}
+
+### Strict Output Requirement:
+You MUST respond with a valid JSON object ONLY. Do not write any preamble, Markdown ticks, or explanations.
+{
+  "intent": "CONVERSATIONAL" | "TECHNICAL",
+  "standalone_query": "string or null"
+}"""
+
 
 class QueryCondenser:
-    def __init__(self, model_name: str = "llama-3.3-70b-versatile"):
+    def __init__(self, model_name: str = "qwen/qwen3.6-27b"):
         api_key = os.getenv("GROQ_API_KEY")
         self.client = Groq(api_key=api_key) if api_key else None
         self.model_name = model_name
 
-    def analyze(self, query: str, history: List[Dict[str, str]], course_code: str) -> Tuple[str, str]:
+    def analyze(
+        self, query: str, history: List[Dict[str, str]], course_code: str
+    ) -> Tuple[str, str]:
         """
-        Returns: (intent, rewritten_query)
-        intent is either 'CONVERSATIONAL' or 'TECHNICAL'
+        Dynamically determines intent and produces a standalone query.
+        Returns: (intent, standalone_query)
         """
-        cleaned_query = query.strip().lower()
-
-        
-        trivial_pleasantries = {"ok", "okay", "k", "thanks", "thank you", "got it", "understood", "cool", "great", "nice"}
-        if cleaned_query in trivial_pleasantries:
-            return "CONVERSATIONAL", query
-
         if not self.client:
             return "TECHNICAL", query
 
         formatted_history = "No previous context."
         if history:
             formatted_history = "\n".join(
-                [f"{msg['role'].capitalize()}: {msg['content']}" for msg in history[-4:]]
+                [f"{msg['role'].capitalize()}: {msg['content'][:300]}" for msg in history[-4:]]
             )
 
-        prompt = INTENT_AND_CONDENSE_PROMPT.format(
-            course_code=course_code,
-            chat_history=formatted_history,
-            question=query
+        user_content = (
+            f"Course: {course_code}\n"
+            f"History:\n{formatted_history}\n"
+            f"Latest Turn: {query}"
         )
+
+        messages = [
+            {"role": "system", "content": CONDENSE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
 
         try:
             res = self.client.chat.completions.create(
                 model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 temperature=0.0,
-                max_tokens=100
+                max_tokens=150,
+                response_format={"type": "json_object"},
             )
-            raw_output = res.choices[0].message.content.strip()
-
-            intent = "TECHNICAL"
-            standalone = query
-
-            for line in raw_output.splitlines():
-                if line.startswith("INTENT:"):
-                    intent = line.replace("INTENT:", "").strip()
-                elif line.startswith("QUERY:"):
-                    extracted = line.replace("QUERY:", "").strip()
-                    if extracted and extracted != "NONE":
-                        standalone = extracted
-
+            raw_text = res.choices[0].message.content.strip()
+            data = json.loads(raw_text)
+            intent = data.get("intent", "TECHNICAL")
+            standalone = data.get("standalone_query") or query
             return intent, standalone
-        except Exception:
+
+        except Exception as e:
+            logger.warning("Groq JSON response parsing failed (%s). Attempting regex extraction.", e)
+            # Fallback: extract JSON with regex if markdown backticks were returned
+            try:
+                if 'raw_text' in locals() and raw_text:
+                    match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
+                    if match:
+                        data = json.loads(match.group(0))
+                        return data.get("intent", "TECHNICAL"), data.get("standalone_query") or query
+            except Exception:
+                pass
+
+            if history:
+                last_user_turn = next((m["content"] for m in reversed(history) if m.get("role") == "user"), None)
+                if last_user_turn and len(query.strip().split()) <= 4:
+                    fallback_standalone = f"{last_user_turn} detailed explanation and examples"
+                    logger.info("Failsafe recovery used: '%s'", fallback_standalone)
+                    return "TECHNICAL", fallback_standalone
+
             return "TECHNICAL", query

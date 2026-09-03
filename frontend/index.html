@@ -1018,6 +1018,8 @@
 
         let sessionId = getOrCreateSessionId();
 
+        let clientChatHistory = [];
+
         function getOrCreateSessionId() {
             let sid = localStorage.getItem("kognit_session_id");
             if (!sid) {
@@ -1100,14 +1102,13 @@
             historyList.appendChild(item);
         }
 
-        // Render LaTeX after Markdown has converted the assistant response to HTML.
-        // Important: this must run after every streamed token update.
-        function renderMath(element) {
+        // Render Markdown first, then render LaTeX with KaTeX.
+        function renderMarkdownWithMath(element, markdownText) {
             if (!element) return;
+            element.innerHTML = marked.parse(markdownText);
 
             if (typeof renderMathInElement !== "function") {
-                // KaTeX is loaded with defer; retry once it becomes available.
-                setTimeout(() => renderMath(element), 50);
+                setTimeout(() => renderMarkdownWithMath(element, markdownText), 50);
                 return;
             }
 
@@ -1131,10 +1132,11 @@
                 query: question,
                 course_code: courseSelect.value,
                 session_id: sessionId,
+                history: clientChatHistory.slice(-4),
                 top_k: 3
             };
 
-            let accumulatedRaw = "";
+            let accumulatedText = "";
 
             try {
                 const response = await fetch(`${BACKEND_URL}/chat/stream`, {
@@ -1144,39 +1146,47 @@
                 });
 
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (!response.body) throw new Error("Streaming response body is unavailable");
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
                 let buffer = "";
+
+                const processSSEBlock = (block) => {
+                    const trimmed = block.trim();
+                    if (!trimmed || !trimmed.startsWith("data: ")) return;
+
+                    const data = JSON.parse(trimmed.replace(/^data:\s*/, ""));
+
+                    if (data.type === "metadata") {
+                        if (data.crag_decision) {
+                            const queryLabel = data.standalone_query || "";
+                            badgeEl.innerHTML = `<span class="meta-tag">${escapeHtml(data.crag_decision)}${queryLabel ? " • " + escapeHtml(queryLabel) : ""}</span>`;
+                        }
+                        renderCitationChips(sourcesEl, data.citations || []);
+                    } else if (data.type === "token") {
+                        accumulatedText += data.content || "";
+                        renderMarkdownWithMath(answerEl, accumulatedText);
+                        thread.scrollTop = thread.scrollHeight;
+                    }
+                };
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
                     buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split("\n\n");
-                    buffer = lines.pop();
+                    const blocks = buffer.split("\n\n");
+                    buffer = blocks.pop() || "";
+                    for (const block of blocks) processSSEBlock(block);
+                }
 
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (!trimmed.startsWith("data: ")) continue;
+                if (buffer.trim()) processSSEBlock(buffer);
 
-                        const jsonPayload = JSON.parse(trimmed.replace(/^data:\s*/, ""));
-
-                        if (jsonPayload.type === "metadata") {
-                            const citations = jsonPayload.citations || [];
-                            if (jsonPayload.crag_decision) {
-                                badgeEl.innerHTML = `<span class="meta-tag">${jsonPayload.crag_decision} • ${jsonPayload.standalone_query || ''}</span>`;
-                            }
-                            renderCitationChips(sourcesEl, citations);
-                        } else if (jsonPayload.type === "token") {
-                            if (accumulatedRaw === "") answerEl.innerHTML = "";
-                            accumulatedRaw += jsonPayload.content;
-                            answerEl.innerHTML = marked.parse(accumulatedRaw);
-                            renderMath(answerEl);
-                            thread.scrollTop = thread.scrollHeight;
-                        }
-                    }
+                if (accumulatedText.trim()) {
+                    clientChatHistory.push({ role: "user", content: question });
+                    clientChatHistory.push({ role: "assistant", content: accumulatedText });
+                    clientChatHistory = clientChatHistory.slice(-4);
                 }
             } catch (err) {
                 answerEl.innerHTML = `<span style="color: #A64444;">Connection error: ${escapeHtml(err.message)}</span>`;
@@ -1226,6 +1236,7 @@
             threadInner.style.display = 'none';
             emptyState.style.display = 'block';
             topbarTitle.textContent = 'New session';
+            clientChatHistory = [];
             document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
         });
 
