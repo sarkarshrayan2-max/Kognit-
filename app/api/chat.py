@@ -1,74 +1,146 @@
 import json
+import logging
+from typing import AsyncIterator
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from app.schemas.chat import ChatRequest
 from app.services.llm.gateway import LLMGateway
+from app.services.rag.condenser import QueryCondenser
 from app.services.rag.crag import CRAGEvaluator
 from app.services.retrieval.fusion import HybridRetriever
+from app.services.session.manager import session_manager
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
+logger = logging.getLogger("kognit.chat")
 
 retriever = HybridRetriever()
 crag = CRAGEvaluator()
 llm_gateway = LLMGateway()
-
+condenser = QueryCondenser()
 
 @router.post("/stream")
-def chat_stream_endpoint(payload: ChatRequest):
-    # 1. Retrieve candidates
-    candidates = retriever.search(
+async def chat_stream_endpoint(payload: ChatRequest):
+    session_id = payload.session_id or "default_session"
+
+    
+    history = session_manager.get_context(
+        session_id=session_id,
+        current_course=payload.course_code
+    )
+    
+    logger.info(
+        "Session: %s | Course: %s | Prior turns loaded: %d",
+        session_id, payload.course_code, len(history)
+    )
+
+    
+    intent, standalone_query = condenser.analyze(
         query=payload.query,
+        history=history,
+        course_code=payload.course_code
+    )
+    logger.info("Intent: %s | Raw: '%s' -> Standalone: '%s'", intent, payload.query, standalone_query)
+
+    
+    if intent == "CONVERSATIONAL":
+        async def conversational_generator() -> AsyncIterator[str]:
+            ack = "Understood! Let me know if you want to explore more examples or dive into another topic."
+            session_manager.add_message(session_id, "user", payload.query, payload.course_code)
+            session_manager.add_message(session_id, "assistant", ack, payload.course_code)
+            
+            meta_event = {
+                "type": "metadata",
+                "crag_decision": "CONVERSATIONAL",
+                "citations": [],
+                "model_used": llm_gateway.model_name,
+                "standalone_query": payload.query,
+            }
+            yield f"data: {json.dumps(meta_event)}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': ack})}\n\n"
+
+        return StreamingResponse(
+            conversational_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    # 3. Hybrid search (dense + sparse BM25)
+    candidates = retriever.search(
+        query=standalone_query,
         course_code=payload.course_code,
         top_k=payload.top_k or 3,
     )
 
-    # 2. Evaluate with CRAG
     decision, final_context = crag.evaluate_and_route(
-        query=payload.query,
+        query=standalone_query,
         local_chunks=candidates,
+        course_code=payload.course_code,
     )
 
     citations = [
         {
-            "source": c.get("metadata", {}).get("source"),
-            "page": c.get("metadata", {}).get("page"),
+            "source": c.get("metadata", {}).get("source", "Course Document"),
+            "page": c.get("metadata", {}).get("page", "?"),
             "score": round(c.get("score", 0.0), 4),
+            "excerpt": c.get("text", "")[:400] + ("..." if len(c.get("text", "")) > 400 else "")
         }
         for c in final_context
     ]
 
-    # Standard synchronous generator for StreamingResponse
-    def event_generator():
+    async def event_generator() -> AsyncIterator[str]:
+        accumulated_answer = []
         try:
-            # Step A: Send metadata event first
             meta_event = {
                 "type": "metadata",
                 "crag_decision": decision,
                 "citations": citations,
                 "model_used": llm_gateway.model_name,
+                "standalone_query": standalone_query,
             }
             yield f"data: {json.dumps(meta_event)}\n\n"
 
             if not final_context:
-                error_event = {
-                    "type": "token",
-                    "content": "No sufficient material found in local documents or external sources.",
-                }
-                yield f"data: {json.dumps(error_event)}\n\n"
+                fallback_msg = "No sufficient material found in local documents or external sources."
+                accumulated_answer.append(fallback_msg)
+                yield f"data: {json.dumps({'type': 'token', 'content': fallback_msg})}\n\n"
                 return
 
-            # Step B: Stream tokens safely
-            for token in llm_gateway.stream_answer(payload.query, final_context):
+            for token in llm_gateway.stream_answer(
+                query=payload.query,
+                retrieved_chunks=final_context,
+                history=history,
+            ):
                 if token:
-                    token_event = {"type": "token", "content": token}
-                    yield f"data: {json.dumps(token_event)}\n\n"
+                    accumulated_answer.append(token)
+                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
         except Exception as err:
-            err_event = {
-                "type": "token",
-                "content": f"\n\n[Generation error: {str(err)}]",
-            }
-            yield f"data: {json.dumps(err_event)}\n\n"
+            logger.error("Streaming failure: %s", str(err), exc_info=True)
+            err_msg = f"\n\n[Generation error: {str(err)}]"
+            accumulated_answer.append(err_msg)
+            yield f"data: {json.dumps({'type': 'token', 'content': err_msg})}\n\n"
+
+        finally:
+            if accumulated_answer:
+                full_text = "".join(accumulated_answer)
+                session_manager.add_message(
+                    session_id=session_id,
+                    role="user",
+                    content=payload.query,
+                    course_code=payload.course_code
+                )
+                session_manager.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    content=full_text,
+                    course_code=payload.course_code,
+                    metadata={"citations": citations, "crag_decision": decision}
+                )
+                logger.info("Persisted Turn for session %s (Length: %d chars)", session_id, len(full_text))
 
     return StreamingResponse(
         event_generator(),
@@ -79,3 +151,9 @@ def chat_stream_endpoint(payload: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+@router.delete("/session/{session_id}")
+def clear_session_endpoint(session_id: str):
+    session_manager.clear_session(session_id)
+    logger.info("Purged session state for %s", session_id)
+    return {"status": "cleared", "session_id": session_id}
