@@ -5,37 +5,27 @@ from app.services.search.restricted_web import RestrictedWebSearch
 
 class CRAGEvaluator:
     """
-    Corrective RAG evaluator.
+    CRAG evaluator for KOGNIT.
 
     Routing:
-        HIGH confidence  -> course documents only
-        MEDIUM confidence -> course + supplementary web
-        LOW confidence    -> web fallback
-
-    Important:
-    Reranker scores are NOT probabilities.
-    Thresholds should eventually be tuned using an evaluation dataset.
+        - CORRECT   -> strong course-document evidence
+        - AMBIGUOUS -> some course evidence, but not strong enough
+        - INCORRECT -> weak/no course evidence, optionally use web
     """
 
     def __init__(
         self,
         high_threshold: float = 0.65,
         low_threshold: float = 0.20,
-        min_score_gap: float = 0.05,
     ):
         self.high_threshold = high_threshold
         self.low_threshold = low_threshold
-        self.min_score_gap = min_score_gap
-
         self.web_searcher = RestrictedWebSearch()
 
+    @staticmethod
     def _course_chunks(
-        self,
-        chunks: List[Dict[str, Any]],
+        chunks: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        Mark retrieved chunks as course sources.
-        """
 
         normalized = []
 
@@ -43,22 +33,17 @@ class CRAGEvaluator:
             item = dict(chunk)
 
             metadata = dict(item.get("metadata", {}))
-
             metadata["source_type"] = "course"
 
             item["metadata"] = metadata
-
             normalized.append(item)
 
         return normalized
 
+    @staticmethod
     def _web_chunks(
-        self,
-        chunks: List[Dict[str, Any]],
+        chunks: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """
-        Mark external search results as web sources.
-        """
 
         normalized = []
 
@@ -66,14 +51,23 @@ class CRAGEvaluator:
             item = dict(chunk)
 
             metadata = dict(item.get("metadata", {}))
-
             metadata["source_type"] = "web"
 
             item["metadata"] = metadata
-
             normalized.append(item)
 
         return normalized
+
+    @staticmethod
+    def _score(chunk: Dict[str, Any]) -> float:
+        """
+        Safely extract reranker/retrieval score.
+        """
+
+        if "rerank_score" in chunk:
+            return float(chunk["rerank_score"])
+
+        return float(chunk.get("score", 0.0))
 
     def evaluate_and_route(
         self,
@@ -85,40 +79,37 @@ class CRAGEvaluator:
         
 
         if not local_chunks:
+
             web_results = self.web_searcher.search(
                 query=query,
                 course_code=course_code,
                 max_results=3,
             )
 
-            web_results = self._web_chunks(web_results)
+            if web_results:
+                return "INCORRECT", self._web_chunks(web_results)
 
-            return "INCORRECT", web_results
+            return "INCORRECT", []
 
-        
+    
+
         course_chunks = self._course_chunks(local_chunks)
 
         
 
-        top_score = course_chunks[0].get("score", 0.0)
-
-        second_score = (
-            course_chunks[1].get("score", 0.0)
-            if len(course_chunks) > 1
-            else 0.0
+        course_chunks.sort(
+            key=self._score,
+            reverse=True,
         )
 
-        score_gap = top_score - second_score
+        top_score = self._score(course_chunks[0])
 
-        
 
-        if (
-            top_score >= self.high_threshold
-            and score_gap >= self.min_score_gap
-        ):
-            return "CORRECT", course_chunks
+        if top_score >= self.high_threshold:
 
-        
+            return "CORRECT", course_chunks[:3]
+
+
 
         if top_score >= self.low_threshold:
 
@@ -128,11 +119,14 @@ class CRAGEvaluator:
                 max_results=2,
             )
 
-            web_results = self._web_chunks(web_results)
+            routed_context = course_chunks[:2]
 
-            blended = course_chunks[:2] + web_results
+            if web_results:
+                routed_context.extend(
+                    self._web_chunks(web_results)
+                )
 
-            return "AMBIGUOUS", blended
+            return "AMBIGUOUS", routed_context
 
         
 
@@ -142,6 +136,8 @@ class CRAGEvaluator:
             max_results=3,
         )
 
-        web_results = self._web_chunks(web_results)
+        if web_results:
 
-        return "INCORRECT", web_results
+            return "INCORRECT", self._web_chunks(web_results)
+
+        return "INCORRECT", []

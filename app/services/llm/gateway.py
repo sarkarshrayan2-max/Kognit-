@@ -8,39 +8,31 @@ from groq import Groq
 class LLMGateway:
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
-
-        if not api_key:
-            raise ValueError("GROQ_API_KEY is not configured.")
-
-        self.client = Groq(api_key=api_key)
-
         self.model_name = os.getenv(
             "GROQ_MODEL",
             "qwen/qwen3.6-27b",
         )
+        self.client = Groq(api_key=api_key) if api_key else None
 
-    # ============================================================
-    # CONTEXT FORMATTING
-    # ============================================================
+    def _require_client(self) -> Groq:
+        if self.client is None:
+            raise RuntimeError(
+                "GROQ_API_KEY is not configured. "
+                "Set GROQ_API_KEY in your .env file."
+            )
+        return self.client
 
     @staticmethod
     def _format_context(
         retrieved_chunks: List[Dict[str, Any]],
     ) -> str:
-
         if not retrieved_chunks:
             return "No reference material was retrieved."
 
         formatted_chunks = []
 
-        for index, chunk in enumerate(
-            retrieved_chunks,
-            start=1,
-        ):
-            metadata = chunk.get(
-                "metadata",
-                {},
-            )
+        for index, chunk in enumerate(retrieved_chunks, start=1):
+            metadata = chunk.get("metadata", {})
 
             source_type = metadata.get(
                 "source_type",
@@ -62,6 +54,11 @@ class LLMGateway:
                 "Unknown",
             )
 
+            url = metadata.get(
+                "url",
+                "",
+            )
+
             text = chunk.get(
                 "text",
                 "",
@@ -70,209 +67,126 @@ class LLMGateway:
             if not text:
                 continue
 
-            # ----------------------------------------------------
-            # Source label
-            # ----------------------------------------------------
-
-            if source_type == "web":
-                label = "EXTERNAL WEB SOURCE"
-            else:
-                label = "COURSE DOCUMENT"
-
-            formatted_chunks.append(
-                f"""
-REFERENCE {index}
-TYPE: {label}
-COURSE: {course_code}
-SOURCE: {source}
-PAGE: {page}
-
-CONTENT:
-{text}
-""".strip()
+            label = (
+                "EXTERNAL WEB SOURCE"
+                if source_type == "web"
+                else "COURSE DOCUMENT"
             )
+
+            reference = (
+                f"REFERENCE {index}\n"
+                f"TYPE: {label}\n"
+                f"COURSE: {course_code}\n"
+                f"SOURCE: {source}\n"
+                f"PAGE: {page}\n"
+            )
+
+            if url:
+                reference += f"URL: {url}\n"
+
+            reference += f"\nCONTENT:\n{text}"
+
+            formatted_chunks.append(reference)
 
         if not formatted_chunks:
             return "No usable reference material was retrieved."
 
-        return "\n\n".join(
-            formatted_chunks
-        )
-
-    # ============================================================
-    # SYSTEM PROMPT
-    # ============================================================
+        return "\n\n".join(formatted_chunks)
 
     @staticmethod
     def _build_system_prompt(
         crag_decision: str,
     ) -> str:
-
-        decision = (
-            crag_decision or "UNKNOWN"
-        ).upper()
-
-        # --------------------------------------------------------
-        # CORRECT
-        # --------------------------------------------------------
+        decision = (crag_decision or "UNKNOWN").upper()
 
         if decision == "CORRECT":
-
             source_instruction = """
-The retrieved course material is considered sufficiently relevant.
+The retrieved course material is sufficiently relevant.
 
 Use the COURSE DOCUMENT material as the primary and authoritative
-source for your answer.
+source for the answer.
 
-Do not introduce information that contradicts the course material.
-
-If the answer cannot be established from the course material,
-say so.
+Answer only from information supported by the course material.
 """.strip()
-
-        # --------------------------------------------------------
-        # AMBIGUOUS
-        # --------------------------------------------------------
 
         elif decision == "AMBIGUOUS":
-
             source_instruction = """
-The retrieved course material is partially relevant, and external
-web material has been included as supplementary information.
+The retrieved material contains both course and external sources.
 
-PRIORITY ORDER:
+Use the COURSE DOCUMENT material as the primary source.
 
-1. COURSE DOCUMENT
-2. EXTERNAL WEB SOURCE
+Use EXTERNAL WEB SOURCES only to clarify or supplement information
+when necessary.
 
-Use the course material as the primary basis of the answer.
-
-Use external sources only when they help clarify, supplement,
-or fill a gap in the course material.
-
-Do not present external information as if it came from the
-course documents.
-
-If an external source materially contributes to the answer,
-make that clear.
+Never present web information as if it came from the course material.
 """.strip()
-
-        # --------------------------------------------------------
-        # INCORRECT
-        # --------------------------------------------------------
 
         elif decision == "INCORRECT":
-
             source_instruction = """
-The local course material was not sufficiently relevant, so
-external web sources were retrieved.
+The local course material was not sufficiently relevant.
 
-Answer using the available external sources when they are relevant.
+The available reference material therefore comes from EXTERNAL WEB
+SOURCES.
 
-Do NOT pretend that external information came from the student's
-course documents.
+Answer the user's question using the external references when they
+contain relevant information.
 
-Clearly indicate when the answer is based on external sources.
+Do not claim that external information came from the course documents.
 
-If the retrieved external sources are insufficient, say that
-reliable information could not be established.
+Do not say that the course material contains the answer when it does not.
+
+If the external references are insufficient, clearly state that the
+available sources do not provide enough information.
 """.strip()
 
-        # --------------------------------------------------------
-        # UNKNOWN
-        # --------------------------------------------------------
-
         else:
-
             source_instruction = """
 Use the retrieved references carefully.
 
-Prefer COURSE DOCUMENT sources over EXTERNAL WEB SOURCES.
+Prefer COURSE DOCUMENT sources when relevant.
 
-Do not invent information.
+Use EXTERNAL WEB SOURCES when they are the relevant available sources.
 
-Do not claim that information came from a source when it did not.
+Do not invent information or source attribution.
 """.strip()
-
-        # --------------------------------------------------------
-        # FINAL SYSTEM PROMPT
-        # --------------------------------------------------------
 
         return f"""
 You are KOGNIT, an academic assistant for engineering students.
 
-Your job is to answer questions accurately using the provided
-reference material.
+Your task is to answer the student's question accurately using the
+provided reference material.
 
 {source_instruction}
 
 GENERAL RULES:
 
 1. Answer the user's actual question directly.
+2. Ground factual claims in the provided references.
+3. Do not fabricate facts, citations, page numbers, URLs, or sources.
+4. Never treat an EXTERNAL WEB SOURCE as a COURSE DOCUMENT.
+5. Do not mention internal system details such as CRAG, retrieval,
+embeddings, vector databases, rerankers, or LangGraph unless the
+student explicitly asks about them.
+6. If the references do not contain enough information, say so.
+7. Explain technical concepts at an engineering-student level.
+8. Use examples when they improve understanding.
+9. Use equations when appropriate.
+10. Use concise tables for comparisons when useful.
+11. Do not reproduce large portions of source material verbatim.
+12. Keep the answer focused.
+13. Do not output internal reasoning.
+14. Do not output a scratchpad.
+15. Do not output analysis or source-selection reasoning.
+16. Output only the final student-facing answer.
+17. Start immediately with the answer.
+18. Do not explain how sources were selected or ranked.
+19. Never claim that information came from the course document when
+the source is external.
 
-2. Ground factual claims in the provided reference material.
-
-3. Do not fabricate facts, citations, page numbers, or sources.
-
-4. Do not mention internal system details such as:
-   - CRAG
-   - retrieval scores
-   - embeddings
-   - vector databases
-   - rerankers
-   - LangGraph
-
-   unless the user explicitly asks about the system.
-
-5. If the references do not contain enough information, say so
-   instead of hallucinating an answer.
-
-6. Explain technical concepts at an appropriate engineering-student
-   level.
-
-7. Use equations when they improve understanding.
-
-8. For comparisons, use a concise table when appropriate.
-
-9. Do not reproduce large portions of the source material verbatim.
-
-10. Keep the answer focused and avoid unnecessary repetition.
-
-11. If a source contains conflicting information, explicitly mention
-    the conflict rather than silently choosing one.
-
-12. Never treat a web source as a course document.
-
-13. Never output internal reasoning or hidden analysis.
-
-14. Never output a scratchpad.
-
-15. Never output phrases such as:
-    "Here's a thinking process:"
-    "Let's think step by step"
-    "Analysis:"
-    "Reasoning:"
-    "I need to analyze"
-    "First, I will analyze"
-    "Output Generation:"
-    "Final Response:"
-
-16. Do not explain how you selected or ranked the sources.
-
-17. Do not describe your internal reasoning process.
-
-18. Output ONLY the final student-facing answer.
-
-19. Start the response immediately with the answer.
-
-The CRAG routing decision for this response is:
+The CRAG routing decision is:
 
 {decision}
 """.strip()
-
-    # ============================================================
-    # MESSAGE BUILDER
-    # ============================================================
 
     def _build_messages(
         self,
@@ -281,7 +195,6 @@ The CRAG routing decision for this response is:
         history: List[Dict[str, str]],
         crag_decision: str,
     ) -> List[Dict[str, str]]:
-
         system_prompt = self._build_system_prompt(
             crag_decision=crag_decision,
         )
@@ -297,22 +210,11 @@ The CRAG routing decision for this response is:
             }
         ]
 
-        # --------------------------------------------------------
-        # CHAT HISTORY
-        # --------------------------------------------------------
-
         if history:
-
             for message in history[-4:]:
+                role = message.get("role")
 
-                role = message.get(
-                    "role"
-                )
-
-                if role not in {
-                    "user",
-                    "assistant",
-                }:
+                if role not in {"user", "assistant"}:
                     continue
 
                 content = message.get(
@@ -330,33 +232,31 @@ The CRAG routing decision for this response is:
                     }
                 )
 
-        # --------------------------------------------------------
-        # CURRENT USER MESSAGE
-        # --------------------------------------------------------
-
         user_message = f"""
 REFERENCE MATERIAL
 ==================
 
 {context}
 
-
 USER QUESTION
 =============
 
 {query}
 
-
 INSTRUCTIONS
 ============
 
-Answer the user's question using the reference material and the
-source-priority rules provided by the system instructions.
+Answer the user's question using the reference material.
+
+The current source routing decision is: {crag_decision.upper()}
+
+If the routing decision is INCORRECT, the external web references are
+the relevant sources for this question.
 
 Return only the final answer for the student.
 
-Do not output internal reasoning, scratchpad content, analysis,
-or source-selection reasoning.
+Do not output internal reasoning, analysis, scratchpad content,
+source-selection reasoning, or system details.
 """.strip()
 
         messages.append(
@@ -368,23 +268,12 @@ or source-selection reasoning.
 
         return messages
 
-    # ============================================================
-    # MODEL OUTPUT CLEANER
-    # ============================================================
-
     @staticmethod
-    def _clean_model_output(
-        text: str,
-    ) -> str:
-
+    def _clean_model_output(text: str) -> str:
         if not text:
             return ""
 
         cleaned = text.strip()
-
-        # --------------------------------------------------------
-        # Remove <think>...</think>
-        # --------------------------------------------------------
 
         cleaned = re.sub(
             r"<think>.*?</think>",
@@ -393,20 +282,12 @@ or source-selection reasoning.
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # --------------------------------------------------------
-        # Remove unfinished <think> blocks
-        # --------------------------------------------------------
-
         cleaned = re.sub(
             r"<think>.*$",
             "",
             cleaned,
             flags=re.DOTALL | re.IGNORECASE,
         )
-
-        # --------------------------------------------------------
-        # Remove closing think tag if it appears alone
-        # --------------------------------------------------------
 
         cleaned = re.sub(
             r"</think>",
@@ -415,103 +296,16 @@ or source-selection reasoning.
             flags=re.IGNORECASE,
         )
 
-        # --------------------------------------------------------
-        # Remove common reasoning prefixes
-        # --------------------------------------------------------
-
-        reasoning_prefixes = [
-            r"Here's a thinking process:",
-            r"Here is a thinking process:",
-            r"Here\'s my thinking process:",
-            r"Here is my thinking process:",
-            r"Let's think step by step:",
-            r"Let\'s think step by step:",
-            r"Thinking process:",
-            r"Reasoning:",
-            r"Analysis:",
-            r"Internal reasoning:",
-            r"Scratchpad:",
-            r"Output Generation:",
-            r"Final Response:",
-        ]
-
-        for prefix in reasoning_prefixes:
-
-            cleaned = re.sub(
-                prefix,
-                "",
-                cleaned,
-                flags=re.IGNORECASE,
-            )
-
-        # --------------------------------------------------------
-        # If the model explicitly generated a thinking section,
-        # discard everything before the actual answer.
-        #
-        # KOGNIT's prompt asks the model to begin directly with
-        # the final answer, so these are safe recovery markers.
-        # --------------------------------------------------------
-
-        answer_markers = [
-            "**Intuitive Concept**",
-            "**Formal Definition**",
-            "**Comparative Breakdown**",
-            "**Formula & Syntax Breakdown**",
-            "**Answer**",
-            "Based on your course material",
-        ]
-
-        positions = []
-
-        for marker in answer_markers:
-
-            position = cleaned.find(
-                marker
-            )
-
-            if position != -1:
-                positions.append(
-                    position
-                )
-
-        if positions:
-
-            first_answer_position = min(
-                positions
-            )
-
-            # Only discard preceding content when it looks like
-            # reasoning contamination.
-            preceding = cleaned[
-                :first_answer_position
-            ]
-
-            reasoning_indicators = [
-                "analyze",
-                "analysis",
-                "reasoning",
-                "thinking",
-                "identify",
-                "draft",
-                "check",
-                "output generation",
-                "final response",
-                "reference material",
-                "source selection",
-            ]
-
-            if any(
-                indicator in preceding.lower()
-                for indicator in reasoning_indicators
-            ):
-
-                cleaned = cleaned[
-                    first_answer_position:
-                ]
-
-        # --------------------------------------------------------
-        # Remove excessive blank lines
-        # --------------------------------------------------------
+        cleaned = re.sub(
+            r"^(Here's a thinking process:|Here is a thinking process:|"
+            r"Here's my thinking process:|Here is my thinking process:|"
+            r"Let's think step by step:?|Thinking process:|Reasoning:|"
+            r"Analysis:|Internal reasoning:|Scratchpad:|"
+            r"Output Generation:|Final Response:)\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
 
         cleaned = re.sub(
             r"\n{3,}",
@@ -521,9 +315,20 @@ or source-selection reasoning.
 
         return cleaned.strip()
 
-    # ============================================================
-    # STREAM ANSWER
-    # ============================================================
+    def _create_completion(
+        self,
+        messages: List[Dict[str, str]],
+    ):
+        client = self._require_client()
+
+        return client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=700,
+            reasoning_format="hidden",
+            stream=True,
+        )
 
     def stream_answer(
         self,
@@ -532,7 +337,6 @@ or source-selection reasoning.
         history: List[Dict[str, str]],
         crag_decision: str = "UNKNOWN",
     ) -> Iterator[str]:
-
         messages = self._build_messages(
             query=query,
             retrieved_chunks=retrieved_chunks,
@@ -540,38 +344,11 @@ or source-selection reasoning.
             crag_decision=crag_decision,
         )
 
-        # --------------------------------------------------------
-        # GROQ STREAM
-        # --------------------------------------------------------
-
-        stream = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=2048,
-            stream=True,
-        )
-
-        # --------------------------------------------------------
-        # IMPORTANT:
-        #
-        # Do NOT clean each individual provider chunk.
-        #
-        # Example:
-        #
-        # chunk 1 = "Here's a think"
-        # chunk 2 = "ing process:"
-        #
-        # Cleaning them independently will fail.
-        #
-        # Therefore we first collect the complete model output,
-        # clean it, and then yield the clean answer.
-        # --------------------------------------------------------
+        stream = self._create_completion(messages)
 
         accumulated_output = []
 
         for chunk in stream:
-
             if not chunk.choices:
                 continue
 
@@ -583,41 +360,36 @@ or source-selection reasoning.
                 None,
             )
 
-            if not content:
+            if content:
+                accumulated_output.append(content)
                 continue
 
-            accumulated_output.append(
-                content
+            reasoning = getattr(
+                delta,
+                "reasoning",
+                None,
             )
 
-        # --------------------------------------------------------
-        # COMPLETE MODEL OUTPUT
-        # --------------------------------------------------------
+            if reasoning:
+                accumulated_output.append(reasoning)
 
-        raw_output = "".join(
-            accumulated_output
-        )
+        raw_output = "".join(accumulated_output)
 
-        # --------------------------------------------------------
-        # SANITIZE
-        # --------------------------------------------------------
-
-        cleaned_output = (
-            self._clean_model_output(
-                raw_output
-            )
+        cleaned_output = self._clean_model_output(
+            raw_output
         )
 
         if not cleaned_output:
-            return
+            fallback_response = self._fallback_completion(
+                messages
+            )
 
-        # --------------------------------------------------------
-        # STREAM CLEANED ANSWER
-        #
-        # This preserves the frontend's existing streaming/SSE
-        # behavior while ensuring that hidden reasoning cannot
-        # leak into the response.
-        # --------------------------------------------------------
+            cleaned_output = self._clean_model_output(
+                fallback_response
+            )
+
+        if not cleaned_output:
+            return
 
         chunk_size = 80
 
@@ -626,7 +398,46 @@ or source-selection reasoning.
             len(cleaned_output),
             chunk_size,
         ):
-
             yield cleaned_output[
                 start:start + chunk_size
             ]
+
+    def _fallback_completion(
+        self,
+        messages: List[Dict[str, str]],
+    ) -> str:
+        client = self._require_client()
+
+        response = client.chat.completions.create(
+            model=self.model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=700,
+            reasoning_format="hidden",
+            stream=False,
+        )
+
+        if not response.choices:
+            return ""
+
+        message = response.choices[0].message
+
+        content = getattr(
+            message,
+            "content",
+            None,
+        )
+
+        if content:
+            return content
+
+        reasoning = getattr(
+            message,
+            "reasoning",
+            None,
+        )
+
+        if reasoning:
+            return reasoning
+
+        return ""

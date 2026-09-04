@@ -12,3 +12,4 @@ tavily-python
 langgraph
 streamlit
 requests
+pydantic-settings

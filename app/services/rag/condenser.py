@@ -11,6 +11,7 @@ load_dotenv()
 
 logger = logging.getLogger("kognit.condenser")
 
+
 CONVERSATIONAL_PATTERNS = {
     "ok",
     "okay",
@@ -52,116 +53,209 @@ CONVERSATIONAL_PATTERNS = {
     "finished",
 }
 
+
 CONDENSE_SYSTEM_PROMPT = """You are the conversational controller and search query formulator for KOGNIT, an academic AI assistant for Electronics and Computer Science (ECS) engineering.
 
-Analyze the conversation history and the student's latest turn to classify intent and formulate a standalone query.
+Analyze the conversation history and the student's latest turn.
 
-### Classification Rules:
+Classify the latest turn as either:
 
-1. "CONVERSATIONAL":
-   Pure acknowledgments, greetings, closures, status confirmations, or casual filler.
-   Examples:
-   - ok
-   - okay
-   - thanks
-   - got it
-   - understood
-   - cool
-   - done
-   - all set
-   - perfect
-   - goodbye
+1. CONVERSATIONAL
+Pure greetings, acknowledgments, confirmations, closures, or casual filler.
 
-   Set:
-   "intent": "CONVERSATIONAL"
-   "standalone_query": null
+Examples:
+- ok
+- okay
+- thanks
+- got it
+- understood
+- cool
+- done
+- all set
+- perfect
+- goodbye
 
-2. "TECHNICAL":
-   The student is asking an actual technical question, requesting an example, or asking for clarification/re-explanation of an academic topic.
-   Examples:
-   - explain again
-   - why is that?
-   - give an example
-   - can you clarify?
-   - what is normalization?
-   - explain inner join
+For CONVERSATIONAL:
+- intent = CONVERSATIONAL
+- standalone_query = null
 
-   Set:
-   "intent": "TECHNICAL"
+2. TECHNICAL
+Any actual academic or technical question, explanation request, example request, clarification, or follow-up question.
 
-   For TECHNICAL queries, formulate a complete, self-contained search query.
-   - Use the conversation history to identify the technical topic.
-   - CRITICAL: Never use conversational words or filler (e.g., "cool", "done", "ok", "yes", "please", "again") as the subject of the search query. Always extract the real underlying engineering subject from context.
-   - Include core concepts, relevant terminology, and course context.
+Examples:
+- explain again
+- why is that?
+- give an example
+- can you clarify?
+- what is normalization?
+- explain inner join
 
-### Examples:
+For TECHNICAL:
+- intent = TECHNICAL
+- standalone_query must be a complete, self-contained search query.
 
-Example 1:
-Input:
-Course: DBMS
-History:
-User: cool
-Assistant: Understood! Let me know if you want to explore more examples or dive into another topic.
-Latest Turn: done
+Use conversation history to identify the actual technical topic.
 
-Output:
-{"intent": "CONVERSATIONAL", "standalone_query": null}
+IMPORTANT:
+Never use conversational filler as the technical subject.
+Words such as:
+- ok
+- cool
+- done
+- yes
+- please
+- again
+- thanks
 
-Example 2:
-Input:
-Course: DBMS
+must not become the search topic.
+
+Example:
+
 History:
 User: What is an Inner Join?
-Assistant: An Inner Join combines matching rows...
-Latest Turn: explain again
+Assistant: An Inner Join combines matching rows.
 
-Output:
-{"intent": "TECHNICAL", "standalone_query": "Inner Join definition mechanism and examples in DBMS"}
+Latest Turn:
+explain again
 
-Example 3:
-Input:
-Course: COA
-History:
-User: How does Booth's algorithm handle negative multipliers?
-Assistant: Booth's algorithm examines bit pairs...
-Latest Turn: thanks got it!
+Correct standalone query:
+Inner Join definition mechanism and examples in DBMS
 
-Output:
-{"intent": "CONVERSATIONAL", "standalone_query": null}
+Return ONLY a JSON object.
 
-### Strict Output Requirement:
-You MUST respond with a valid JSON object ONLY.
-Do not write any preamble, Markdown ticks, or explanations.
+Required format:
+
 {
-  "intent": "CONVERSATIONAL" | "TECHNICAL",
+  "intent": "CONVERSATIONAL" or "TECHNICAL",
   "standalone_query": "string or null"
 }
 """
 
 
 class QueryCondenser:
-    def __init__(self, model_name: str = "qwen/qwen3.6-27b"):
+
+    def __init__(
+        self,
+        model_name: str = "qwen/qwen3.6-27b",
+    ):
         api_key = os.getenv("GROQ_API_KEY")
-        self.client = Groq(api_key=api_key) if api_key else None
+
+        self.client = (
+            Groq(api_key=api_key)
+            if api_key
+            else None
+        )
+
         self.model_name = model_name
 
-    def _is_obviously_conversational(self, query: str) -> bool:
-        """
-        Detect obvious conversational messages without calling the LLM.
-        Prevents conversational fillers from entering technical retrieval flows.
-        """
+
+
+    def _is_obviously_conversational(
+        self,
+        query: str,
+    ) -> bool:
+
         normalized = query.strip().lower()
 
         if normalized in CONVERSATIONAL_PATTERNS:
             return True
 
-        cleaned = re.sub(r"[^a-z\s]", "", normalized)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        cleaned = re.sub(
+            r"[^a-z\s]",
+            "",
+            normalized,
+        )
 
-        if cleaned in CONVERSATIONAL_PATTERNS:
-            return True
+        cleaned = re.sub(
+            r"\s+",
+            " ",
+            cleaned,
+        ).strip()
 
-        return False
+        return cleaned in CONVERSATIONAL_PATTERNS
+
+    
+
+    @staticmethod
+    def _extract_json(
+        text: str,
+    ) -> Dict:
+
+        cleaned = text.strip()
+
+        cleaned = re.sub(
+            r"^```json\s*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+
+        cleaned = re.sub(
+            r"^```\s*",
+            "",
+            cleaned,
+        )
+
+        cleaned = re.sub(
+            r"\s*```$",
+            "",
+            cleaned,
+        )
+
+        cleaned = cleaned.strip()
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(
+                "No JSON object found in condenser response"
+            )
+
+        json_text = cleaned[
+            start : end + 1
+        ]
+
+        return json.loads(json_text)
+
+    
+
+    @staticmethod
+    def _format_history(
+        history: List[Dict[str, str]],
+    ) -> str:
+
+        if not history:
+            return "No previous context."
+
+        history_parts = []
+
+        for message in history[-4:]:
+
+            role = message.get(
+                "role",
+                "user",
+            )
+
+            content = message.get(
+                "content",
+                "",
+            ).strip()
+
+            if not content:
+                continue
+
+            history_parts.append(
+                f"{role.capitalize()}: "
+                f"{content[:500]}"
+            )
+
+        if not history_parts:
+            return "No previous context."
+
+        return "\n".join(history_parts)
+
+    
 
     def analyze(
         self,
@@ -169,94 +263,256 @@ class QueryCondenser:
         history: List[Dict[str, str]],
         course_code: str,
     ) -> Tuple[str, str]:
-        """
-        Dynamically determines intent and produces a standalone query.
-        Returns:
-            (intent, standalone_query)
-        """
-        if self._is_obviously_conversational(query):
-            logger.info("Deterministic conversational intent detected: '%s'", query)
-            return "CONVERSATIONAL", query
 
-        if not self.client:
-            logger.warning("GROQ_API_KEY not configured. Using original query without condensation.")
-            return "TECHNICAL", query
+        query = query.strip()
 
-        formatted_history = "No previous context."
-        if history:
-            formatted_history = "\n".join(
-                [f"{msg['role'].capitalize()}: {msg['content'][:300]}" for msg in history[-4:]]
+        
+
+        if not query:
+
+            return (
+                "CONVERSATIONAL",
+                query,
             )
 
+        
+
+        if self._is_obviously_conversational(
+            query
+        ):
+
+            logger.info(
+                "Conversational intent detected: %s",
+                query,
+            )
+
+            return (
+                "CONVERSATIONAL",
+                query,
+            )
+
+        
+
+        if not self.client:
+
+            logger.warning(
+                "GROQ_API_KEY not configured. "
+                "Skipping query condensation."
+            )
+
+            return (
+                "TECHNICAL",
+                query,
+            )
+
+        
+
+        formatted_history = (
+            self._format_history(history)
+        )
+
+        
+
         user_content = (
-            f"Course: {course_code}\n"
-            f"History:\n{formatted_history}\n"
-            f"Latest Turn: {query}"
+            f"Course: {course_code}\n\n"
+            f"Conversation History:\n"
+            f"{formatted_history}\n\n"
+            f"Latest Student Turn:\n"
+            f"{query}\n\n"
+            "Return ONLY the required JSON object."
         )
 
         messages = [
-            {"role": "system", "content": CONDENSE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
+            {
+                "role": "system",
+                "content": CONDENSE_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": user_content,
+            },
         ]
 
+        
+
         try:
-            res = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=0.0,
-                max_tokens=150,
-                response_format={"type": "json_object"},
+
+            response = (
+                self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=messages,
+                    temperature=0.0,
+                    max_tokens=150,
+                )
             )
 
-            raw_text = res.choices[0].message.content.strip()
-            data = json.loads(raw_text)
+            if not response.choices:
 
-            intent = data.get("intent", "TECHNICAL")
-            standalone = data.get("standalone_query")
+                logger.warning(
+                    "Condenser returned no choices."
+                )
 
-            if intent not in {"CONVERSATIONAL", "TECHNICAL"}:
-                logger.warning("Unexpected intent '%s' from condenser. Defaulting to TECHNICAL.", intent)
-                intent = "TECHNICAL"
+                return (
+                    "TECHNICAL",
+                    query,
+                )
 
-            if intent == "CONVERSATIONAL":
-                return "CONVERSATIONAL", query
+            raw_text = (
+                response.choices[0]
+                .message
+                .content
+                or ""
+            ).strip()
 
-            standalone = standalone or query
-            return "TECHNICAL", standalone
+            if not raw_text:
 
-        except Exception as e:
-            logger.warning("Groq JSON response parsing failed (%s). Attempting regex extraction.", e)
+                logger.warning(
+                    "Condenser returned empty content."
+                )
+
+                return (
+                    "TECHNICAL",
+                    query,
+                )
+
+            
 
             try:
-                if "raw_text" in locals() and raw_text:
-                    match = re.search(r"\{.*?\}", raw_text, re.DOTALL)
-                    if match:
-                        data = json.loads(match.group(0))
-                        intent = data.get("intent", "TECHNICAL")
-                        standalone = data.get("standalone_query")
+                data = self._extract_json(raw_text)
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "Invalid condenser JSON: %s. Using original query.",
+                    exc,
+                )
 
-                        if intent == "CONVERSATIONAL":
-                            return "CONVERSATIONAL", query
+                return (
+                    "TECHNICAL",
+                    query,
+                )
 
-                        return "TECHNICAL", standalone or query
-            except Exception as regex_error:
-                logger.warning("Regex JSON recovery also failed: %s", regex_error)
+            
+
+            intent = str(
+                data.get(
+                    "intent",
+                    "TECHNICAL",
+                )
+            ).upper().strip()
+
+            if intent not in {
+                "CONVERSATIONAL",
+                "TECHNICAL",
+            }:
+
+                logger.warning(
+                    "Invalid condenser intent: %s",
+                    intent,
+                )
+
+                intent = "TECHNICAL"
+
+            
+
+            if intent == "CONVERSATIONAL":
+
+                return (
+                    "CONVERSATIONAL",
+                    query,
+                )
+
+            
+
+            standalone_query = data.get(
+                "standalone_query"
+            )
+
+            if not isinstance(
+                standalone_query,
+                str,
+            ):
+
+                standalone_query = query
+
+            standalone_query = (
+                standalone_query.strip()
+            )
+
+            if not standalone_query:
+
+                standalone_query = query
+
+            logger.info(
+                "Condensed query: '%s' -> '%s'",
+                query,
+                standalone_query,
+            )
+
+            return (
+                "TECHNICAL",
+                standalone_query,
+            )
+
+        
+
+        except Exception as exc:
+
+            logger.exception(
+                "Query condensation failed: %s",
+                exc,
+            )
+
+            
 
             if history:
+
                 last_technical_turn = next(
                     (
-                        m["content"]
-                        for m in reversed(history)
-                        if m.get("role") == "user"
-                        and not self._is_obviously_conversational(m.get("content", ""))
+                        message.get(
+                            "content",
+                            "",
+                        )
+                        for message in reversed(
+                            history
+                        )
+                        if (
+                            message.get(
+                                "role"
+                            )
+                            == "user"
+                            and not self._is_obviously_conversational(
+                                message.get(
+                                    "content",
+                                    "",
+                                )
+                            )
+                        )
                     ),
                     None,
                 )
 
-                current_words = query.strip().split()
-                if last_technical_turn and 0 < len(current_words) <= 4:
-                    fallback_standalone = f"{last_technical_turn} detailed explanation and examples"
-                    logger.info("Failsafe recovery used: '%s'", fallback_standalone)
-                    return "TECHNICAL", fallback_standalone
+                current_words = query.split()
 
-            return "TECHNICAL", query
+                if (
+                    last_technical_turn
+                    and 0 < len(current_words) <= 4
+                ):
+
+                    fallback_query = (
+                        f"{last_technical_turn} "
+                        "detailed explanation and examples"
+                    )
+
+                    logger.info(
+                        "Using condenser fallback: %s",
+                        fallback_query,
+                    )
+
+                    return (
+                        "TECHNICAL",
+                        fallback_query,
+                    )
+
+            return (
+                "TECHNICAL",
+                query,
+            )

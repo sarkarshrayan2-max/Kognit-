@@ -1,73 +1,203 @@
 import logging
 from typing import Any, Dict, List, Optional, TypedDict
-from langgraph.graph import StateGraph, START, END
+import hashlib
+from langgraph.graph import END, START, StateGraph
 
+from app.services.llm.gateway import LLMGateway
 from app.services.rag.condenser import QueryCondenser
 from app.services.rag.crag import CRAGEvaluator
 from app.services.retrieval.fusion import HybridRetriever
-from app.services.llm.gateway import LLMGateway
 
 logger = logging.getLogger("kognit.workflow")
+
+
 
 retriever = HybridRetriever()
 crag_evaluator = CRAGEvaluator()
 condenser = QueryCondenser()
 llm_gateway = LLMGateway()
 
-class GraphState(TypedDict):
+
+class GraphState(TypedDict, total=False):
     query: str
     course_code: str
     history: List[Dict[str, str]]
     top_k: int
+
     intent: str
     standalone_query: str
-    response_type: str  
-    answer: Optional[str]  
+
+    response_type: str
+
     local_chunks: List[Dict[str, Any]]
     final_context: List[Dict[str, Any]]
+
     crag_decision: str
     citations: List[Dict[str, Any]]
 
+    answer: Optional[str]
+
+
+
 def condense_node(state: GraphState) -> Dict[str, Any]:
-    intent, standalone = condenser.analyze(
+    """
+    Analyze the user's query.
+
+    Responsibilities:
+    - Detect conversational queries.
+    - Rewrite technical follow-up questions into
+      standalone retrieval queries.
+    """
+
+    intent, standalone_query = condenser.analyze(
         query=state["query"],
         history=state.get("history", []),
-        course_code=state["course_code"]
+        course_code=state["course_code"],
     )
+
+    if not standalone_query:
+        standalone_query = state["query"]
+
+    logger.info(
+        "Intent=%s | query=%s | standalone=%s",
+        intent,
+        state["query"],
+        standalone_query,
+    )
+
     return {
-        "intent": intent, 
-        "standalone_query": standalone
+        "intent": intent,
+        "standalone_query": standalone_query,
     }
 
+
 def conversational_node(state: GraphState) -> Dict[str, Any]:
-    ack = "Understood! Let me know if you want to explore more examples or dive into another topic."
+    """
+    Handles greetings, acknowledgements and other
+    non-technical messages without invoking retrieval.
+    """
+
+    answer = (
+        "Understood! Let me know if you want to explore "
+        "more examples or dive into another topic."
+    )
+
     return {
         "response_type": "CONVERSATIONAL",
-        "answer": ack,
+        "answer": answer,
         "crag_decision": "CONVERSATIONAL",
         "final_context": [],
-        "citations": []
+        "citations": [],
     }
 
 def retrieve_node(state: GraphState) -> Dict[str, Any]:
-    k = state.get("top_k", 3)
+    """
+    Performs:
+        Dense retrieval
+        +
+        Sparse BM25 retrieval
+        +
+        RRF fusion
+        +
+        Cross-encoder reranking
+    """
+
+    top_k = state.get("top_k", 3)
+
     chunks = retriever.search(
         query=state["standalone_query"],
         course_code=state["course_code"],
-        top_k=k
+        top_k=top_k,
     )
-    return {"local_chunks": chunks}
 
-def crag_eval_node(state):
+    logger.info(
+        "Retrieved %d local chunks for course=%s",
+        len(chunks),
+        state["course_code"],
+    )
+
+    return {
+        "local_chunks": chunks,
+    }
+
+def deduplicate_chunks(
+    chunks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Remove duplicate chunks while preserving the highest-scoring copy.
+
+    Duplicate detection is based primarily on document/page/chunk identity
+    and falls back to normalized text when metadata is incomplete.
+    """
+
+    unique = {}
+
+    for chunk in chunks:
+        metadata = chunk.get("metadata", {})
+
+        document_id = metadata.get("document_id", "")
+        source = metadata.get("source", "")
+        page = metadata.get("page", "")
+        chunk_index = metadata.get("chunk_index", "")
+
+        text = " ".join(
+            chunk.get("text", "").split()
+        ).strip()
+
+        if document_id or chunk_index:
+            key = (
+                "metadata",
+                document_id,
+                source,
+                page,
+                chunk_index,
+            )
+        else:
+            text_hash = hashlib.sha256(
+                text.lower().encode("utf-8")
+            ).hexdigest()
+
+            key = (
+                "text",
+                source,
+                page,
+                text_hash,
+            )
+
+        existing = unique.get(key)
+
+        if existing is None:
+            unique[key] = chunk
+            continue
+
+        existing_score = float(
+            existing.get("score", 0.0)
+        )
+
+        current_score = float(
+            chunk.get("score", 0.0)
+        )
+
+        if current_score > existing_score:
+            unique[key] = chunk
+
+    return list(unique.values())
+
+def crag_eval_node(
+    state: GraphState,
+) -> Dict[str, Any]:
 
     decision, routed_context = (
         crag_evaluator.evaluate_and_route(
-            state.get("local_chunks", []),
-            state["query"],
-            state["course_code"],
+            query=state["standalone_query"],
+            local_chunks=state.get(
+                "local_chunks",
+                [],
+            ),
+            course_code=state["course_code"],
         )
     )
-
+    routed_context = deduplicate_chunks(routed_context)
     citations = []
 
     for chunk in routed_context:
@@ -97,27 +227,31 @@ def crag_eval_node(state):
             "Course Document",
         )
 
-        url = ""
-
-        
-
         if source_type == "course":
 
-            if document_id:
+            url = (
+                f"/documents/files/"
+                f"{document_id}"
+                f"#page={page}"
+                if document_id
+                else ""
+            )
 
-                url = (
-                    f"/documents/files/"
-                    f"{document_id}"
-                    f"#page={page}"
-                )
-
-        
         elif source_type == "web":
 
             url = metadata.get(
                 "url",
                 "",
             )
+
+        else:
+
+            url = ""
+
+        text = chunk.get(
+            "text",
+            "",
+        )
 
         citations.append(
             {
@@ -133,18 +267,10 @@ def crag_eval_node(state):
                     4,
                 ),
                 "excerpt": (
-                    chunk.get(
-                        "text",
-                        "",
-                    )[:400]
+                    text[:400]
                     + (
                         "..."
-                        if len(
-                            chunk.get(
-                                "text",
-                                "",
-                            )
-                        ) > 400
+                        if len(text) > 400
                         else ""
                     )
                 ),
@@ -161,27 +287,135 @@ def crag_eval_node(state):
         "citations": citations,
     }
 
+
+
+def generation_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Generates the final answer.
+
+    Generation now happens INSIDE LangGraph instead of
+    being manually orchestrated by /chat/stream.
+    """
+
+    final_context = state.get(
+        "final_context",
+        [],
+    )
+
+    if not final_context:
+        return {
+            "answer": (
+                "No sufficient material was found in the "
+                "course documents or permitted external sources."
+            )
+        }
+
+    answer_parts: List[str] = []
+
+    try:
+        for token in llm_gateway.stream_answer(
+            query=state["query"],
+            retrieved_chunks=final_context,
+            history=state.get("history", []),
+            crag_decision=state.get(
+                "crag_decision",
+                "UNKNOWN",
+            ),
+        ):
+            if token:
+                answer_parts.append(token)
+
+    except Exception:
+        logger.exception("LLM generation failed")
+
+        return {
+            "answer": (
+                "I encountered an error while generating "
+                "the answer."
+            )
+        }
+
+    return {
+        "answer": "".join(answer_parts),
+    }
+
+
+
 def route_by_intent(state: GraphState) -> str:
-    return "handle_conversational" if state["intent"] == "CONVERSATIONAL" else "execute_retrieval"
+    """
+    Determines whether retrieval is necessary.
+    """
+
+    if state.get("intent") == "CONVERSATIONAL":
+        return "handle_conversational"
+
+    return "execute_retrieval"
+
 
 workflow = StateGraph(GraphState)
 
-workflow.add_node("condenser", condense_node)
-workflow.add_node("conversational_handler", conversational_node)
-workflow.add_node("retriever", retrieve_node)
-workflow.add_node("crag", crag_eval_node)
 
-workflow.add_edge(START, "condenser")
+workflow.add_node(
+    "condenser",
+    condense_node,
+)
+
+workflow.add_node(
+    "conversational_handler",
+    conversational_node,
+)
+
+workflow.add_node(
+    "retriever",
+    retrieve_node,
+)
+
+workflow.add_node(
+    "crag",
+    crag_eval_node,
+)
+
+workflow.add_node(
+    "generator",
+    generation_node,
+)
+
+workflow.add_edge(
+    START,
+    "condenser",
+)
+
+
 workflow.add_conditional_edges(
     "condenser",
     route_by_intent,
     {
         "handle_conversational": "conversational_handler",
-        "execute_retrieval": "retriever"
-    }
+        "execute_retrieval": "retriever",
+    },
 )
-workflow.add_edge("conversational_handler", END)
-workflow.add_edge("retriever", "crag")
-workflow.add_edge("crag", END)
 
+
+workflow.add_edge(
+    "conversational_handler",
+    END,
+)
+
+
+workflow.add_edge(
+    "retriever",
+    "crag",
+)
+
+
+workflow.add_edge(
+    "crag",
+    "generator",
+)
+
+
+workflow.add_edge(
+    "generator",
+    END,
+)
 kognit_graph = workflow.compile()

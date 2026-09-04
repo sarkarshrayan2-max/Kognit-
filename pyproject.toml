@@ -1,7 +1,54 @@
 [project]
 name = "kognit"
 version = "0.1.0"
-description = "Add your description here"
+description = "KOGNIT - AI-powered academic knowledge assistant"
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "pydantic-settings",
+    "python-multipart",
+    "python-dotenv",
+
+    "langgraph",
+    "langchain-core",
+    "langchain-text-splitters",
+    "langsmith",
+
+    "groq",
+
+    "qdrant-client",
+    "fastembed",
+
+    "sentence-transformers",
+    "transformers",
+    "torch",
+
+    "pymupdf",
+
+    "tavily-python",
+
+    "numpy",
+    "scikit-learn",
+
+    "psycopg[binary]",
+    "sqlalchemy",
+
+    "redis",
+
+    "streamlit",
+]
+
+
+[tool.uv]
+
+package = false
+
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "."
+]
