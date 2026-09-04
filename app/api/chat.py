@@ -1,13 +1,22 @@
 import json
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, Dict, Any
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from app.graph.workflow import kognit_graph, llm_gateway
-from app.schemas.chat import ChatRequest
-from app.services.session.manager import session_manager
+from app.graph.workflow import (
+    kognit_graph,
+    llm_gateway,
+)
+
+from app.schemas.chat import (
+    ChatRequest,
+)
+
+from app.services.session.manager import (
+    session_manager,
+)
 
 
 router = APIRouter(
@@ -15,30 +24,55 @@ router = APIRouter(
     tags=["Chat"],
 )
 
-logger = logging.getLogger("kognit.chat")
+
+logger = logging.getLogger(
+    "kognit.chat"
+)
+
+
+
+
+def sse_event(
+    payload: Dict[str, Any],
+) -> str:
+
+    return (
+        f"data: "
+        f"{json.dumps(payload, ensure_ascii=False)}"
+        f"\n\n"
+    )
+
+
 
 
 @router.post("/stream")
 async def chat_stream_endpoint(
     payload: ChatRequest,
 ):
+
     session_id = (
         payload.session_id
         or "default_session"
     )
 
+    
 
-    server_history = session_manager.get_context(
-        session_id=session_id,
-        current_course=payload.course_code,
+    server_history = (
+        session_manager.get_context(
+            session_id=session_id,
+            current_course=
+                payload.course_code,
+        )
     )
 
+    
 
     payload_history = [
         {
             "role": message.role,
             "content": message.content,
         }
+
         for message in (
             payload.history or []
         )
@@ -50,158 +84,416 @@ async def chat_stream_endpoint(
         else payload_history
     )
 
+    
+
     initial_state = {
         "query": payload.query,
-        "course_code": payload.course_code,
-        "history": history,
-        "top_k": payload.top_k or 3,
+
+        "course_code":
+            payload.course_code,
+
+        "history":
+            history,
+
+        "top_k":
+            payload.top_k or 3,
     }
 
-    try:
-        graph_output = await kognit_graph.ainvoke(
-            initial_state
+    
+
+    async def event_generator(
+    ) -> AsyncIterator[str]:
+
+        accumulated_answer = ""
+
+        metadata_sent = False
+
+        standalone_query = (
+            payload.query
         )
 
-    except Exception as exc:
-        logger.exception(
-            "LangGraph execution failed"
+        response_type = (
+            "TECHNICAL"
         )
 
-        async def error_generator():
-            error_event = {
-                "type": "error",
-                "content": (
-                    "An internal error occurred "
-                    "while processing your request."
-                ),
-            }
+        decision = "UNKNOWN"
 
-            yield (
-                f"data: "
-                f"{json.dumps(error_event)}"
-                f"\n\n"
-            )
-
-        return StreamingResponse(
-            error_generator(),
-            media_type="text/event-stream",
-        )
-
-    response_type = graph_output.get(
-        "response_type",
-        "TECHNICAL",
-    )
-
-    answer = graph_output.get(
-        "answer",
-        "",
-    )
-
-    decision = graph_output.get(
-        "crag_decision",
-        "UNKNOWN",
-    )
-
-    standalone_query = graph_output.get(
-        "standalone_query",
-        payload.query,
-    )
-
-    citations = graph_output.get(
-        "citations",
-        [],
-    )
-
-
-    async def event_generator() -> AsyncIterator[str]:
+        citations = []
 
         try:
 
+            
 
-            metadata_event = {
-                "type": "metadata",
-                "crag_decision": decision,
-                "citations": citations,
-                "model_used": (
-                    llm_gateway.model_name
-                ),
-                "standalone_query": (
-                    standalone_query
-                ),
-                "response_type": response_type,
-            }
+            async for chunk in (
+                kognit_graph.astream(
+                    initial_state,
 
-            yield (
-                f"data: "
-                f"{json.dumps(metadata_event)}"
-                f"\n\n"
-            )
+                    stream_mode=[
+                        "custom",
+                        "updates",
+                    ],
 
-
-            if answer:
-
-                token_event = {
-                    "type": "token",
-                    "content": answer,
-                }
-
-                yield (
-                    f"data: "
-                    f"{json.dumps(token_event)}"
-                    f"\n\n"
+                    version="v2",
                 )
-            yield (
-                f"data: "
-                f"{json.dumps({'type': 'done'})}"
-                f"\n\n"
+            ):
+
+                chunk_type = (
+                    chunk.get(
+                        "type"
+                    )
+                )
+
+                
+
+                if (
+                    chunk_type
+                    == "custom"
+                ):
+
+                    data = chunk.get(
+                        "data",
+                        {},
+                    )
+
+                    if not isinstance(
+                        data,
+                        dict,
+                    ):
+                        continue
+
+                    if (
+                        data.get("type")
+                        != "token"
+                    ):
+                        continue
+
+                    content = data.get(
+                        "content",
+                        "",
+                    )
+
+                    if not content:
+                        continue
+
+                    accumulated_answer += (
+                        content
+                    )
+
+                    yield sse_event(
+                        {
+                            "type":
+                                "token",
+
+                            "content":
+                                content,
+                        }
+                    )
+
+                    continue
+
+                
+                if (
+                    chunk_type
+                    != "updates"
+                ):
+                    continue
+
+                update_data = chunk.get(
+                    "data",
+                    {},
+                )
+
+                if not isinstance(
+                    update_data,
+                    dict,
+                ):
+                    continue
+
+            
+
+                for (
+                    node_name,
+                    node_update,
+                ) in update_data.items():
+
+                    if not isinstance(
+                        node_update,
+                        dict,
+                    ):
+                        continue
+
+                
+
+                    if (
+                        node_name
+                        == "condenser"
+                    ):
+
+                        standalone_query = (
+                            node_update.get(
+                                "standalone_query",
+                                standalone_query,
+                            )
+                        )
+
+                        continue
+
+                    
+
+                    if (
+                        node_name
+                        == "crag"
+                    ):
+
+                        decision = (
+                            node_update.get(
+                                "crag_decision",
+                                "UNKNOWN",
+                            )
+                        )
+
+                        citations = (
+                            node_update.get(
+                                "citations",
+                                [],
+                            )
+                        )
+
+                        response_type = (
+                            node_update.get(
+                                "response_type",
+                                "TECHNICAL",
+                            )
+                        )
+
+                        if not metadata_sent:
+
+                            metadata_sent = True
+
+                            yield sse_event(
+                                {
+                                    "type":
+                                        "metadata",
+
+                                    "crag_decision":
+                                        decision,
+
+                                    "citations":
+                                        citations,
+
+                                    "model_used":
+                                        llm_gateway.model_name,
+
+                                    "standalone_query":
+                                        standalone_query,
+
+                                    "response_type":
+                                        response_type,
+                                }
+                            )
+
+                        continue
+
+
+                    if (
+                        node_name
+                        == "conversational_handler"
+                    ):
+
+                        response_type = (
+                            node_update.get(
+                                "response_type",
+                                "CONVERSATIONAL",
+                            )
+                        )
+
+                        decision = (
+                            node_update.get(
+                                "crag_decision",
+                                "CONVERSATIONAL",
+                            )
+                        )
+
+                        citations = (
+                            node_update.get(
+                                "citations",
+                                [],
+                            )
+                        )
+
+                        answer = (
+                            node_update.get(
+                                "answer",
+                                "",
+                            )
+                        )
+
+                        if not metadata_sent:
+
+                            metadata_sent = True
+
+                            yield sse_event(
+                                {
+                                    "type":
+                                        "metadata",
+
+                                    "crag_decision":
+                                        decision,
+
+                                    "citations":
+                                        citations,
+
+                                    "model_used":
+                                        llm_gateway.model_name,
+
+                                    "standalone_query":
+                                        standalone_query,
+
+                                    "response_type":
+                                        response_type,
+                                }
+                            )
+
+                        
+                        if (
+                            answer
+                            and not accumulated_answer
+                        ):
+
+                            accumulated_answer = (
+                                answer
+                            )
+
+                            yield sse_event(
+                                {
+                                    "type":
+                                        "token",
+
+                                    "content":
+                                        answer,
+                                }
+                            )
+
+                        continue
+
+                    
+
+                    if (
+                        node_name
+                        == "generator"
+                    ):
+
+                        final_answer = (
+                            node_update.get(
+                                "answer",
+                                "",
+                            )
+                        )
+
+                        
+                        if (
+                            final_answer
+                            and not accumulated_answer
+                        ):
+
+                            accumulated_answer = (
+                                final_answer
+                            )
+
+                            yield sse_event(
+                                {
+                                    "type":
+                                        "token",
+
+                                    "content":
+                                        final_answer,
+                                }
+                            )
+
+            
+
+            if accumulated_answer:
+
+                session_manager.add_message(
+                    session_id=session_id,
+
+                    role="user",
+
+                    content=payload.query,
+
+                    course_code=
+                        payload.course_code,
+                )
+
+                session_manager.add_message(
+                    session_id=session_id,
+
+                    role="assistant",
+
+                    content=
+                        accumulated_answer,
+
+                    course_code=
+                        payload.course_code,
+
+                    metadata={
+                        "citations":
+                            citations,
+
+                        "crag_decision":
+                            decision,
+                    },
+                )
+
+            
+
+            yield sse_event(
+                {
+                    "type": "done"
+                }
             )
 
-            session_manager.add_message(
-                session_id=session_id,
-                role="user",
-                content=payload.query,
-                course_code=payload.course_code,
-            )
-
-            session_manager.add_message(
-                session_id=session_id,
-                role="assistant",
-                content=answer,
-                course_code=payload.course_code,
-                metadata={
-                    "citations": citations,
-                    "crag_decision": decision,
-                },
-            )
-
-        except Exception as exc:
+        except Exception:
 
             logger.exception(
-                "SSE response failed"
+                "LangGraph streaming failed"
             )
 
-            error_event = {
-                "type": "error",
-                "content": (
-                    "An error occurred while "
-                    "sending the response."
-                ),
-            }
+            yield sse_event(
+                {
+                    "type": "error",
 
-            yield (
-                f"data: "
-                f"{json.dumps(error_event)}"
-                f"\n\n"
+                    "content": (
+                        "An internal error "
+                        "occurred while "
+                        "processing your request."
+                    ),
+                }
             )
+
 
     return StreamingResponse(
         event_generator(),
-        media_type="text/event-stream",
+
+        media_type=
+            "text/event-stream",
+
         headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
+            "Cache-Control":
+                "no-cache, no-transform",
+
+            "Connection":
+                "keep-alive",
+
+            "X-Accel-Buffering":
+                "no",
+
+            "X-Content-Type-Options":
+                "nosniff",
         },
     )
+
+
 
 @router.delete(
     "/session/{session_id}"
@@ -209,10 +501,15 @@ async def chat_stream_endpoint(
 def clear_session_endpoint(
     session_id: str,
 ):
+
     session_manager.clear_session(
         session_id
     )
+
     return {
-        "status": "cleared",
-        "session_id": session_id,
+        "status":
+            "cleared",
+
+        "session_id":
+            session_id,
     }

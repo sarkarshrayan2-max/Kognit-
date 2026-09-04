@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from typing import Any, Dict, Iterator, List
@@ -5,14 +6,23 @@ from typing import Any, Dict, Iterator, List
 from groq import Groq
 
 
+logger = logging.getLogger("kognit.llm")
+
+
 class LLMGateway:
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
+
         self.model_name = os.getenv(
             "GROQ_MODEL",
             "qwen/qwen3.6-27b",
         )
-        self.client = Groq(api_key=api_key) if api_key else None
+
+        self.client = (
+            Groq(api_key=api_key)
+            if api_key
+            else None
+        )
 
     def _require_client(self) -> Groq:
         if self.client is None:
@@ -20,19 +30,26 @@ class LLMGateway:
                 "GROQ_API_KEY is not configured. "
                 "Set GROQ_API_KEY in your .env file."
             )
-        return self.client
 
+        return self.client
     @staticmethod
     def _format_context(
         retrieved_chunks: List[Dict[str, Any]],
     ) -> str:
+
         if not retrieved_chunks:
             return "No reference material was retrieved."
 
         formatted_chunks = []
 
-        for index, chunk in enumerate(retrieved_chunks, start=1):
-            metadata = chunk.get("metadata", {})
+        for index, chunk in enumerate(
+            retrieved_chunks,
+            start=1,
+        ):
+            metadata = chunk.get(
+                "metadata",
+                {},
+            )
 
             source_type = metadata.get(
                 "source_type",
@@ -82,24 +99,40 @@ class LLMGateway:
             )
 
             if url:
-                reference += f"URL: {url}\n"
+                reference += (
+                    f"URL: {url}\n"
+                )
 
-            reference += f"\nCONTENT:\n{text}"
+            reference += (
+                f"\nCONTENT:\n{text}"
+            )
 
-            formatted_chunks.append(reference)
+            formatted_chunks.append(
+                reference
+            )
 
         if not formatted_chunks:
-            return "No usable reference material was retrieved."
+            return (
+                "No usable reference material "
+                "was retrieved."
+            )
 
-        return "\n\n".join(formatted_chunks)
+        return "\n\n".join(
+            formatted_chunks
+        )
+
 
     @staticmethod
     def _build_system_prompt(
         crag_decision: str,
     ) -> str:
-        decision = (crag_decision or "UNKNOWN").upper()
+
+        decision = (
+            crag_decision or "UNKNOWN"
+        ).upper()
 
         if decision == "CORRECT":
+
             source_instruction = """
 The retrieved course material is sufficiently relevant.
 
@@ -110,6 +143,7 @@ Answer only from information supported by the course material.
 """.strip()
 
         elif decision == "AMBIGUOUS":
+
             source_instruction = """
 The retrieved material contains both course and external sources.
 
@@ -122,6 +156,7 @@ Never present web information as if it came from the course material.
 """.strip()
 
         elif decision == "INCORRECT":
+
             source_instruction = """
 The local course material was not sufficiently relevant.
 
@@ -140,6 +175,7 @@ available sources do not provide enough information.
 """.strip()
 
         else:
+
             source_instruction = """
 Use the retrieved references carefully.
 
@@ -188,6 +224,7 @@ The CRAG routing decision is:
 {decision}
 """.strip()
 
+
     def _build_messages(
         self,
         query: str,
@@ -195,15 +232,23 @@ The CRAG routing decision is:
         history: List[Dict[str, str]],
         crag_decision: str,
     ) -> List[Dict[str, str]]:
-        system_prompt = self._build_system_prompt(
-            crag_decision=crag_decision,
+
+        system_prompt = (
+            self._build_system_prompt(
+                crag_decision=crag_decision,
+            )
         )
 
-        context = self._format_context(
-            retrieved_chunks=retrieved_chunks,
+        context = (
+            self._format_context(
+                retrieved_chunks=
+                retrieved_chunks,
+            )
         )
 
-        messages: List[Dict[str, str]] = [
+        messages: List[
+            Dict[str, str]
+        ] = [
             {
                 "role": "system",
                 "content": system_prompt,
@@ -211,10 +256,17 @@ The CRAG routing decision is:
         ]
 
         if history:
-            for message in history[-4:]:
-                role = message.get("role")
 
-                if role not in {"user", "assistant"}:
+            for message in history[-4:]:
+
+                role = message.get(
+                    "role"
+                )
+
+                if role not in {
+                    "user",
+                    "assistant",
+                }:
                     continue
 
                 content = message.get(
@@ -248,7 +300,8 @@ INSTRUCTIONS
 
 Answer the user's question using the reference material.
 
-The current source routing decision is: {crag_decision.upper()}
+The current source routing decision is:
+{crag_decision.upper()}
 
 If the routing decision is INCORRECT, the external web references are
 the relevant sources for this question.
@@ -268,8 +321,12 @@ source-selection reasoning, or system details.
 
         return messages
 
+
     @staticmethod
-    def _clean_model_output(text: str) -> str:
+    def _clean_model_output(
+        text: str,
+    ) -> str:
+
         if not text:
             return ""
 
@@ -279,14 +336,20 @@ source-selection reasoning, or system details.
             r"<think>.*?</think>",
             "",
             cleaned,
-            flags=re.DOTALL | re.IGNORECASE,
+            flags=(
+                re.DOTALL
+                | re.IGNORECASE
+            ),
         )
 
         cleaned = re.sub(
             r"<think>.*$",
             "",
             cleaned,
-            flags=re.DOTALL | re.IGNORECASE,
+            flags=(
+                re.DOTALL
+                | re.IGNORECASE
+            ),
         )
 
         cleaned = re.sub(
@@ -297,11 +360,18 @@ source-selection reasoning, or system details.
         )
 
         cleaned = re.sub(
-            r"^(Here's a thinking process:|Here is a thinking process:|"
-            r"Here's my thinking process:|Here is my thinking process:|"
-            r"Let's think step by step:?|Thinking process:|Reasoning:|"
-            r"Analysis:|Internal reasoning:|Scratchpad:|"
-            r"Output Generation:|Final Response:)\s*",
+            r"^(Here's a thinking process:|"
+            r"Here is a thinking process:|"
+            r"Here's my thinking process:|"
+            r"Here is my thinking process:|"
+            r"Let's think step by step:?|"
+            r"Thinking process:|"
+            r"Reasoning:|"
+            r"Analysis:|"
+            r"Internal reasoning:|"
+            r"Scratchpad:|"
+            r"Output Generation:|"
+            r"Final Response:)\s*",
             "",
             cleaned,
             flags=re.IGNORECASE,
@@ -319,102 +389,136 @@ source-selection reasoning, or system details.
         self,
         messages: List[Dict[str, str]],
     ):
+
         client = self._require_client()
 
         return client.chat.completions.create(
             model=self.model_name,
             messages=messages,
-            temperature=0.2,
-            max_tokens=700,
-            reasoning_format="hidden",
+            temperature=0.7,
+            max_completion_tokens=900,
+
+            reasoning_effort="none",
+
             stream=True,
         )
+
+
 
     def stream_answer(
         self,
         query: str,
-        retrieved_chunks: List[Dict[str, Any]],
-        history: List[Dict[str, str]],
+        retrieved_chunks: List[
+            Dict[str, Any]
+        ],
+        history: List[
+            Dict[str, str]
+        ],
         crag_decision: str = "UNKNOWN",
     ) -> Iterator[str]:
+
         messages = self._build_messages(
             query=query,
-            retrieved_chunks=retrieved_chunks,
+            retrieved_chunks=
+                retrieved_chunks,
             history=history,
-            crag_decision=crag_decision,
+            crag_decision=
+                crag_decision,
         )
 
-        stream = self._create_completion(messages)
+        received_content = False
 
-        accumulated_output = []
+        try:
 
-        for chunk in stream:
-            if not chunk.choices:
-                continue
-
-            delta = chunk.choices[0].delta
-
-            content = getattr(
-                delta,
-                "content",
-                None,
-            )
-
-            if content:
-                accumulated_output.append(content)
-                continue
-
-            reasoning = getattr(
-                delta,
-                "reasoning",
-                None,
-            )
-
-            if reasoning:
-                accumulated_output.append(reasoning)
-
-        raw_output = "".join(accumulated_output)
-
-        cleaned_output = self._clean_model_output(
-            raw_output
-        )
-
-        if not cleaned_output:
-            fallback_response = self._fallback_completion(
+            stream = self._create_completion(
                 messages
             )
 
-            cleaned_output = self._clean_model_output(
-                fallback_response
+            for chunk in stream:
+
+                if not chunk.choices:
+                    continue
+
+                delta = (
+                    chunk.choices[0].delta
+                )
+
+                
+                content = getattr(
+                    delta,
+                    "content",
+                    None,
+                )
+
+                if not content:
+                    continue
+
+                received_content = True
+
+                
+                yield content
+
+        except Exception:
+
+            logger.exception(
+                "Groq streaming generation failed"
             )
 
-        if not cleaned_output:
-            return
+        
+            if not received_content:
 
-        chunk_size = 80
+                try:
 
-        for start in range(
-            0,
-            len(cleaned_output),
-            chunk_size,
-        ):
-            yield cleaned_output[
-                start:start + chunk_size
-            ]
+                    fallback_response = (
+                        self._fallback_completion(
+                            messages
+                        )
+                    )
+
+                    cleaned = (
+                        self._clean_model_output(
+                            fallback_response
+                        )
+                    )
+
+                    if cleaned:
+                        yield cleaned
+                        return
+
+                except Exception:
+
+                    logger.exception(
+                        "Groq fallback generation failed"
+                    )
+
+        if not received_content:
+
+            yield (
+                "I couldn't generate an answer "
+                "right now. Please try the "
+                "question again."
+            )
+
+
 
     def _fallback_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: List[
+            Dict[str, str]
+        ],
     ) -> str:
+
         client = self._require_client()
 
-        response = client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=700,
-            reasoning_format="hidden",
-            stream=False,
+        response = (
+            client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=0.7,
+                max_completion_tokens=900,
+                reasoning_effort="none",
+                stream=False,
+            )
         )
 
         if not response.choices:
@@ -430,14 +534,5 @@ source-selection reasoning, or system details.
 
         if content:
             return content
-
-        reasoning = getattr(
-            message,
-            "reasoning",
-            None,
-        )
-
-        if reasoning:
-            return reasoning
 
         return ""

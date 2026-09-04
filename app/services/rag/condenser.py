@@ -121,7 +121,9 @@ explain again
 Correct standalone query:
 Inner Join definition mechanism and examples in DBMS
 
-Return ONLY a JSON object.
+Return ONLY a valid JSON object.
+Do not use markdown fences.
+Do not include reasoning, commentary, or any text before or after the JSON.
 
 Required format:
 
@@ -342,7 +344,11 @@ class QueryCondenser:
                     model=self.model_name,
                     messages=messages,
                     temperature=0.0,
-                    max_tokens=150,
+                    max_completion_tokens=200,
+                    reasoning_effort="none",
+                    response_format={
+                        "type": "json_object",
+                    },
                 )
             )
 
@@ -391,6 +397,16 @@ class QueryCondenser:
                 )
 
             
+
+            if not isinstance(data, dict):
+                logger.warning(
+                    "Condenser JSON is not an object: %r",
+                    type(data).__name__,
+                )
+                return (
+                    "TECHNICAL",
+                    query,
+                )
 
             intent = str(
                 data.get(
