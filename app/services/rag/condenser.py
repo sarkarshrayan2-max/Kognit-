@@ -11,7 +11,6 @@ load_dotenv()
 
 logger = logging.getLogger("kognit.condenser")
 
-
 CONVERSATIONAL_PATTERNS = {
     "ok",
     "okay",
@@ -53,15 +52,17 @@ CONVERSATIONAL_PATTERNS = {
     "finished",
 }
 
+VALID_INTENTS = {"CONVERSATIONAL", "TECHNICAL", "OFF_TOPIC"}
 
-CONDENSE_SYSTEM_PROMPT = """You are the conversational controller and search query formulator for KOGNIT, an academic AI assistant for Electronics and Computer Science (ECS) engineering.
+CONDENSE_SYSTEM_PROMPT = """You are the conversational controller and search query formulator for KOGNIT, an academic AI assistant for Electronics and Computer Science engineering.
 
 Analyze the conversation history and the student's latest turn.
 
-Classify the latest turn as either:
+Classify the latest turn as exactly one of:
 
 1. CONVERSATIONAL
-Pure greetings, acknowledgments, confirmations, closures, or casual filler.
+
+Pure greetings, acknowledgments, confirmations, closures, or casual filler with no actual topic or content.
 
 Examples:
 - ok
@@ -80,7 +81,8 @@ For CONVERSATIONAL:
 - standalone_query = null
 
 2. TECHNICAL
-Any actual academic or technical question, explanation request, example request, clarification, or follow-up question.
+
+Any actual academic or technical question, explanation request, example request, clarification, or follow-up question about engineering, computer science, or a related technical subject.
 
 Examples:
 - explain again
@@ -89,50 +91,73 @@ Examples:
 - can you clarify?
 - what is normalization?
 - explain inner join
+- why does self-attention work?
+- what is positional encoding?
 
 For TECHNICAL:
 - intent = TECHNICAL
 - standalone_query must be a complete, self-contained search query.
 
-Use conversation history to identify the actual technical topic.
+3. OFF_TOPIC
+
+A real, substantive message (not a greeting or filler) that is about a subject with NO technical, engineering, or computer science content — general knowledge, literature, entertainment, sports, personal topics, or any other subject unrelated to the assistant's academic domain.
+
+CONVERSATIONAL is filler with no topic at all. OFF_TOPIC is a genuine question or statement that DOES have a topic, but that topic is not technical/academic.
+
+Examples:
+- tell me about Oliver Twist
+- who won the world cup last year?
+- what's a good recipe for pasta?
+- recommend me a movie
+- what's the weather like today?
+
+For OFF_TOPIC:
+- intent = OFF_TOPIC
+- standalone_query = the student's topic, restated plainly (not transformed into a technical question)
 
 IMPORTANT:
-Never use conversational filler as the technical subject.
-Words such as:
-- ok
-- cool
-- done
-- yes
-- please
-- again
-- thanks
+Do not decide whether a TECHNICAL question belongs to the selected course — that is handled elsewhere.
+Do not add course names merely because a course was selected.
+Do not transform a technical question into an artificial course-specific question.
+Do not force a genuinely off-topic, non-technical message into TECHNICAL just because it is not a greeting.
 
-must not become the search topic.
+The standalone query for TECHNICAL should preserve the student's actual technical topic.
 
-Example:
+If the student asks:
+"What is positional encoding?"
 
-History:
-User: What is an Inner Join?
-Assistant: An Inner Join combines matching rows.
+Return:
+{"intent": "TECHNICAL", "standalone_query": "What is positional encoding?"}
 
-Latest Turn:
-explain again
+If the student asks:
+"Why is that?"
 
-Correct standalone query:
-Inner Join definition mechanism and examples in DBMS
+and the previous technical topic was positional encoding, return:
+{"intent": "TECHNICAL", "standalone_query": "Why is positional encoding used in Transformer models?"}
+
+If the student asks:
+"explain again"
+
+and the previous technical topic was inner join, return:
+{"intent": "TECHNICAL", "standalone_query": "Explain inner join in DBMS with an example"}
+
+If the student asks:
+"tell me about Oliver Twist"
+
+Return:
+{"intent": "OFF_TOPIC", "standalone_query": "Oliver Twist"}
 
 Return ONLY a valid JSON object.
 Do not use markdown fences.
-Do not include reasoning, commentary, or any text before or after the JSON.
+Do not include reasoning or commentary.
 
 Required format:
 
 {
-  "intent": "CONVERSATIONAL" or "TECHNICAL",
+  "intent": "CONVERSATIONAL" or "TECHNICAL" or "OFF_TOPIC",
   "standalone_query": "string or null"
 }
 """
-
 
 class QueryCondenser:
 
@@ -150,13 +175,10 @@ class QueryCondenser:
 
         self.model_name = model_name
 
-
-
     def _is_obviously_conversational(
         self,
         query: str,
     ) -> bool:
-
         normalized = query.strip().lower()
 
         if normalized in CONVERSATIONAL_PATTERNS:
@@ -176,13 +198,8 @@ class QueryCondenser:
 
         return cleaned in CONVERSATIONAL_PATTERNS
 
-    
-
     @staticmethod
-    def _extract_json(
-        text: str,
-    ) -> Dict:
-
+    def _extract_json(text: str) -> Dict:
         cleaned = text.strip()
 
         cleaned = re.sub(
@@ -214,26 +231,20 @@ class QueryCondenser:
                 "No JSON object found in condenser response"
             )
 
-        json_text = cleaned[
-            start : end + 1
-        ]
-
-        return json.loads(json_text)
-
-    
+        return json.loads(
+            cleaned[start:end + 1]
+        )
 
     @staticmethod
     def _format_history(
         history: List[Dict[str, str]],
     ) -> str:
-
         if not history:
             return "No previous context."
 
         history_parts = []
 
         for message in history[-4:]:
-
             role = message.get(
                 "role",
                 "user",
@@ -248,8 +259,7 @@ class QueryCondenser:
                 continue
 
             history_parts.append(
-                f"{role.capitalize()}: "
-                f"{content[:500]}"
+                f"{role.capitalize()}: {content[:500]}"
             )
 
         if not history_parts:
@@ -257,66 +267,42 @@ class QueryCondenser:
 
         return "\n".join(history_parts)
 
-    
-
     def analyze(
         self,
         query: str,
         history: List[Dict[str, str]],
         course_code: str,
     ) -> Tuple[str, str]:
+        """Returns (intent, standalone_query_or_original_text).
+
+        intent is one of "CONVERSATIONAL", "TECHNICAL", "OFF_TOPIC".
+        Callers should route OFF_TOPIC the same way as OUT_OF_SCOPE from
+        the CRAG evaluator (i.e. decline to search course/web material for
+        it), rather than treating it as a TECHNICAL query.
+        """
 
         query = query.strip()
 
-        
-
         if not query:
+            return "CONVERSATIONAL", query
 
-            return (
-                "CONVERSATIONAL",
-                query,
-            )
-
-        
-
-        if self._is_obviously_conversational(
-            query
-        ):
-
+        if self._is_obviously_conversational(query):
             logger.info(
                 "Conversational intent detected: %s",
                 query,
             )
-
-            return (
-                "CONVERSATIONAL",
-                query,
-            )
-
-        
+            return "CONVERSATIONAL", query
 
         if not self.client:
-
             logger.warning(
-                "GROQ_API_KEY not configured. "
-                "Skipping query condensation."
+                "GROQ_API_KEY not configured. Skipping query condensation."
             )
+            return "TECHNICAL", query
 
-            return (
-                "TECHNICAL",
-                query,
-            )
-
-        
-
-        formatted_history = (
-            self._format_history(history)
-        )
-
-        
+        formatted_history = self._format_history(history)
 
         user_content = (
-            f"Course: {course_code}\n\n"
+            f"Selected course: {course_code}\n\n"
             f"Conversation History:\n"
             f"{formatted_history}\n\n"
             f"Latest Student Turn:\n"
@@ -335,10 +321,7 @@ class QueryCondenser:
             },
         ]
 
-        
-
         try:
-
             response = (
                 self.client.chat.completions.create(
                     model=self.model_name,
@@ -353,60 +336,18 @@ class QueryCondenser:
             )
 
             if not response.choices:
+                return "TECHNICAL", query
 
-                logger.warning(
-                    "Condenser returned no choices."
-                )
-
-                return (
-                    "TECHNICAL",
-                    query,
-                )
-
-            raw_text = (
+            raw = (
                 response.choices[0]
                 .message
                 .content
-                or ""
-            ).strip()
+            )
 
-            if not raw_text:
+            if not raw:
+                return "TECHNICAL", query
 
-                logger.warning(
-                    "Condenser returned empty content."
-                )
-
-                return (
-                    "TECHNICAL",
-                    query,
-                )
-
-            
-
-            try:
-                data = self._extract_json(raw_text)
-            except (json.JSONDecodeError, ValueError) as exc:
-                logger.warning(
-                    "Invalid condenser JSON: %s. Using original query.",
-                    exc,
-                )
-
-                return (
-                    "TECHNICAL",
-                    query,
-                )
-
-            
-
-            if not isinstance(data, dict):
-                logger.warning(
-                    "Condenser JSON is not an object: %r",
-                    type(data).__name__,
-                )
-                return (
-                    "TECHNICAL",
-                    query,
-                )
+            data = self._extract_json(raw)
 
             intent = str(
                 data.get(
@@ -415,120 +356,38 @@ class QueryCondenser:
                 )
             ).upper().strip()
 
-            if intent not in {
-                "CONVERSATIONAL",
-                "TECHNICAL",
-            }:
-
-                logger.warning(
-                    "Invalid condenser intent: %s",
-                    intent,
-                )
-
+            if intent not in VALID_INTENTS:
                 intent = "TECHNICAL"
 
-            
-
             if intent == "CONVERSATIONAL":
+                return "CONVERSATIONAL", query
 
-                return (
-                    "CONVERSATIONAL",
-                    query,
-                )
-
-            
-
-            standalone_query = data.get(
+            standalone = data.get(
                 "standalone_query"
             )
 
-            if not isinstance(
-                standalone_query,
-                str,
-            ):
+            if not standalone:
+                standalone = query
 
-                standalone_query = query
+            standalone = str(
+                standalone
+            ).strip()
 
-            standalone_query = (
-                standalone_query.strip()
-            )
+            if not standalone:
+                standalone = query
 
-            if not standalone_query:
-
-                standalone_query = query
-
-            logger.info(
-                "Condensed query: '%s' -> '%s'",
-                query,
-                standalone_query,
-            )
-
-            return (
-                "TECHNICAL",
-                standalone_query,
-            )
-
-        
-
-        except Exception as exc:
-
-            logger.exception(
-                "Query condensation failed: %s",
-                exc,
-            )
-
-            
-
-            if history:
-
-                last_technical_turn = next(
-                    (
-                        message.get(
-                            "content",
-                            "",
-                        )
-                        for message in reversed(
-                            history
-                        )
-                        if (
-                            message.get(
-                                "role"
-                            )
-                            == "user"
-                            and not self._is_obviously_conversational(
-                                message.get(
-                                    "content",
-                                    "",
-                                )
-                            )
-                        )
-                    ),
-                    None,
+            if intent == "OFF_TOPIC":
+                logger.info(
+                    "Off-topic (non-technical) intent detected: %s",
+                    query,
                 )
+                return "OFF_TOPIC", standalone
 
-                current_words = query.split()
+            return "TECHNICAL", standalone
 
-                if (
-                    last_technical_turn
-                    and 0 < len(current_words) <= 4
-                ):
-
-                    fallback_query = (
-                        f"{last_technical_turn} "
-                        "detailed explanation and examples"
-                    )
-
-                    logger.info(
-                        "Using condenser fallback: %s",
-                        fallback_query,
-                    )
-
-                    return (
-                        "TECHNICAL",
-                        fallback_query,
-                    )
-
-            return (
-                "TECHNICAL",
-                query,
+        except Exception:
+            logger.exception(
+                "Query condensation failed"
             )
+
+            return "TECHNICAL", query

@@ -5,11 +5,11 @@ from typing import Any, Dict, Iterator, List
 
 from groq import Groq
 
-
 logger = logging.getLogger("kognit.llm")
 
 
 class LLMGateway:
+
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
 
@@ -32,6 +32,7 @@ class LLMGateway:
             )
 
         return self.client
+
     @staticmethod
     def _format_context(
         retrieved_chunks: List[Dict[str, Any]],
@@ -121,7 +122,6 @@ class LLMGateway:
             formatted_chunks
         )
 
-
     @staticmethod
     def _build_system_prompt(
         crag_decision: str,
@@ -129,7 +129,7 @@ class LLMGateway:
 
         decision = (
             crag_decision or "UNKNOWN"
-        ).upper()
+        ).upper().strip()
 
         if decision == "CORRECT":
 
@@ -142,46 +142,84 @@ source for the answer.
 Answer only from information supported by the course material.
 """.strip()
 
-        elif decision == "AMBIGUOUS":
+        elif decision == "WEB_FALLBACK":
 
             source_instruction = """
-The retrieved material contains both course and external sources.
+The question is relevant to the selected course, but the course
+documents do not contain sufficient information.
 
-Use the COURSE DOCUMENT material as the primary source.
+Use the provided EXTERNAL WEB SOURCES to answer the question.
 
-Use EXTERNAL WEB SOURCES only to clarify or supplement information
-when necessary.
+The external sources were selected using the active course scope.
 
-Never present web information as if it came from the course material.
+Never present external information as if it came from a course
+document.
+
+If course-document information and external information differ,
+clearly distinguish them.
 """.strip()
 
-        elif decision == "INCORRECT":
+        elif decision == "INSUFFICIENT":
 
             source_instruction = """
-The local course material was not sufficiently relevant.
+The question is relevant to the selected course, but the available
+course material is insufficient.
 
-The available reference material therefore comes from EXTERNAL WEB
-SOURCES.
+Use only the provided COURSE DOCUMENT material.
 
-Answer the user's question using the external references when they
-contain relevant information.
+Do not invent missing information.
 
-Do not claim that external information came from the course documents.
+If the available material cannot answer the question, explicitly state
+that the available course material is insufficient.
+""".strip()
 
-Do not say that the course material contains the answer when it does not.
+        elif decision == "NOT_FOUND":
 
-If the external references are insufficient, clearly state that the
-available sources do not provide enough information.
+            source_instruction = """
+No sufficiently relevant reference material was found.
+
+Do not invent an answer.
+
+Clearly state that sufficient information was not found.
+""".strip()
+
+        elif decision == "OUT_OF_SCOPE":
+
+            source_instruction = """
+The question is outside the scope of the selected course.
+
+Do not answer the technical question.
+
+The application should normally handle this decision before reaching
+the LLM generation stage.
+""".strip()
+
+        elif decision == "OFF_TOPIC":
+
+            source_instruction = """
+The student's message is not a technical or academic question at all
+(e.g. it concerns literature, entertainment, general trivia, or another
+subject unrelated to engineering coursework).
+
+Do not answer the underlying non-technical topic.
+
+Briefly and politely note that you can only help with technical and
+academic questions for the student's courses, and invite them to ask
+one.
+
+The application should normally handle this decision before reaching
+the LLM generation stage.
 """.strip()
 
         else:
 
             source_instruction = """
-Use the retrieved references carefully.
+Use the provided reference material carefully.
 
-Prefer COURSE DOCUMENT sources when relevant.
+Prefer COURSE DOCUMENT material when it is relevant.
 
-Use EXTERNAL WEB SOURCES when they are the relevant available sources.
+Use EXTERNAL WEB SOURCES only when the routing decision explicitly
+allows external sources.
 
 Do not invent information or source attribution.
 """.strip()
@@ -200,9 +238,9 @@ GENERAL RULES:
 2. Ground factual claims in the provided references.
 3. Do not fabricate facts, citations, page numbers, URLs, or sources.
 4. Never treat an EXTERNAL WEB SOURCE as a COURSE DOCUMENT.
-5. Do not mention internal system details such as CRAG, retrieval,
-embeddings, vector databases, rerankers, or LangGraph unless the
-student explicitly asks about them.
+5. Do not mention CRAG, retrieval, embeddings, vector databases,
+rerankers, LangGraph, or internal system details unless the student
+explicitly asks about them.
 6. If the references do not contain enough information, say so.
 7. Explain technical concepts at an engineering-student level.
 8. Use examples when they improve understanding.
@@ -216,14 +254,15 @@ student explicitly asks about them.
 16. Output only the final student-facing answer.
 17. Start immediately with the answer.
 18. Do not explain how sources were selected or ranked.
-19. Never claim that information came from the course document when
-the source is external.
+19. Never claim that information came from a course document when the
+source is external.
+20. Never use external sources when the routing decision does not allow
+them.
 
-The CRAG routing decision is:
+The current routing decision is:
 
 {decision}
 """.strip()
-
 
     def _build_messages(
         self,
@@ -233,22 +272,15 @@ The CRAG routing decision is:
         crag_decision: str,
     ) -> List[Dict[str, str]]:
 
-        system_prompt = (
-            self._build_system_prompt(
-                crag_decision=crag_decision,
-            )
+        system_prompt = self._build_system_prompt(
+            crag_decision=crag_decision,
         )
 
-        context = (
-            self._format_context(
-                retrieved_chunks=
-                retrieved_chunks,
-            )
+        context = self._format_context(
+            retrieved_chunks=retrieved_chunks,
         )
 
-        messages: List[
-            Dict[str, str]
-        ] = [
+        messages: List[Dict[str, str]] = [
             {
                 "role": "system",
                 "content": system_prompt,
@@ -295,16 +327,35 @@ USER QUESTION
 
 {query}
 
-INSTRUCTIONS
-============
+ROUTING DECISION
+================
 
-Answer the user's question using the reference material.
-
-The current source routing decision is:
 {crag_decision.upper()}
 
-If the routing decision is INCORRECT, the external web references are
-the relevant sources for this question.
+SOURCE RULES
+============
+
+CORRECT:
+Use the provided course documents.
+
+WEB_FALLBACK:
+Use the provided external web sources and any useful course material.
+Do not claim external information came from the course documents.
+
+INSUFFICIENT:
+Use only the provided course material and explicitly acknowledge
+missing information when necessary.
+
+NOT_FOUND:
+Do not invent an answer.
+
+OUT_OF_SCOPE:
+Do not answer the technical question. The application should normally
+block generation for this decision.
+
+OFF_TOPIC:
+Do not answer the non-technical topic. The application should normally
+block generation for this decision.
 
 Return only the final answer for the student.
 
@@ -320,7 +371,6 @@ source-selection reasoning, or system details.
         )
 
         return messages
-
 
     @staticmethod
     def _clean_model_output(
@@ -397,33 +447,46 @@ source-selection reasoning, or system details.
             messages=messages,
             temperature=0.7,
             max_completion_tokens=900,
-
             reasoning_effort="none",
-
             stream=True,
         )
-
-
 
     def stream_answer(
         self,
         query: str,
-        retrieved_chunks: List[
-            Dict[str, Any]
-        ],
-        history: List[
-            Dict[str, str]
-        ],
+        retrieved_chunks: List[Dict[str, Any]],
+        history: List[Dict[str, str]],
         crag_decision: str = "UNKNOWN",
     ) -> Iterator[str]:
 
+        decision = crag_decision.upper()
+
+        if decision == "OUT_OF_SCOPE":
+
+            yield (
+                "This question is outside the scope of the selected "
+                "course. Please select the appropriate course to ask "
+                "this question."
+            )
+
+            return
+
+        if decision == "OFF_TOPIC":
+
+            yield (
+                "That's outside what I can help with here — I'm built "
+                "to assist with technical and academic questions for "
+                "your engineering courses. Feel free to ask me "
+                "something related to your coursework instead."
+            )
+
+            return
+
         messages = self._build_messages(
             query=query,
-            retrieved_chunks=
-                retrieved_chunks,
+            retrieved_chunks=retrieved_chunks,
             history=history,
-            crag_decision=
-                crag_decision,
+            crag_decision=crag_decision,
         )
 
         received_content = False
@@ -443,7 +506,6 @@ source-selection reasoning, or system details.
                     chunk.choices[0].delta
                 )
 
-                
                 content = getattr(
                     delta,
                     "content",
@@ -455,7 +517,6 @@ source-selection reasoning, or system details.
 
                 received_content = True
 
-                
                 yield content
 
         except Exception:
@@ -464,7 +525,6 @@ source-selection reasoning, or system details.
                 "Groq streaming generation failed"
             )
 
-        
             if not received_content:
 
                 try:
@@ -499,13 +559,9 @@ source-selection reasoning, or system details.
                 "question again."
             )
 
-
-
     def _fallback_completion(
         self,
-        messages: List[
-            Dict[str, str]
-        ],
+        messages: List[Dict[str, str]],
     ) -> str:
 
         client = self._require_client()
