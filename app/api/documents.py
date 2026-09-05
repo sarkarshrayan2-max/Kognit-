@@ -2,19 +2,32 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import (
     APIRouter,
     BackgroundTasks,
+    Depends,
     File,
     Form,
     HTTPException,
     UploadFile,
 )
 from fastapi.responses import FileResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.services.ingestion.indexer import DocumentIndexer
+from app.core.database import SessionLocal, get_db
+from app.models.course import Course
+from app.models.document import Document
+from app.services.ingestion.indexer import (
+    CHUNKING_VERSION,
+    COLLECTION_NAME,
+    DENSE_MODEL_NAME,
+    EMBEDDING_VERSION,
+    generate_document_id,
+    indexer,
+)
 
 router = APIRouter(
     prefix="/documents",
@@ -24,6 +37,7 @@ router = APIRouter(
 logger = logging.getLogger("kognit.documents")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 UPLOAD_DIR = PROJECT_ROOT / "uploads"
 
 UPLOAD_DIR.mkdir(
@@ -37,13 +51,15 @@ ALLOWED_EXTENSIONS = {
     ".pdf",
 }
 
-INGESTION_JOBS: Dict[str, Dict[str, Any]] = {}
-
-indexer = DocumentIndexer()
+INGESTION_JOBS: dict[str, dict[str, Any]] = {}
 
 
 def safe_filename(filename: str) -> str:
+    """
+    Prevent path traversal and normalize unsafe filenames.
+    """
     filename = Path(filename).name
+
     filename = re.sub(
         r"[^a-zA-Z0-9._-]",
         "_",
@@ -56,7 +72,12 @@ def safe_filename(filename: str) -> str:
     return filename
 
 
-def resolve_stored_pdf(stored_filename: str) -> Path:
+def resolve_stored_pdf(
+    stored_filename: str,
+) -> Path:
+    """
+    Resolve a stored PDF safely inside uploads/.
+    """
     filename = Path(stored_filename).name
 
     pdf_path = (
@@ -74,28 +95,28 @@ def resolve_stored_pdf(stored_filename: str) -> Path:
     return pdf_path
 
 
-def find_document_point(document_id: str):
-    points, _ = indexer.client.scroll(
-        collection_name=indexer.collection_name,
-        scroll_filter={
-            "must": [
-                {
-                    "key": "document_id",
-                    "match": {
-                        "value": document_id,
-                    },
-                }
-            ]
-        },
-        limit=1,
-        with_payload=True,
-        with_vectors=False,
+def get_course(
+    db: Session,
+    course_code: str,
+) -> Course:
+    """
+    Retrieve a course from PostgreSQL.
+    """
+    course = db.scalar(
+        select(Course).where(
+            Course.code == course_code
+        )
     )
 
-    if not points:
-        return None
+    if course is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Course '{course_code}' not found."
+            ),
+        )
 
-    return points[0]
+    return course
 
 
 def process_pdf_background(
@@ -106,6 +127,8 @@ def process_pdf_background(
     unit: int,
     visibility: str,
 ):
+    db = SessionLocal()
+
     try:
         INGESTION_JOBS[job_id] = {
             "status": "processing",
@@ -113,17 +136,19 @@ def process_pdf_background(
             "stored_filename": Path(
                 pdf_path
             ).name,
-            "course_code": course_code.upper(),
+            "course_code": course_code,
             "unit": unit,
         }
 
-        if not Path(pdf_path).exists():
+        pdf = Path(pdf_path)
+
+        if not pdf.exists():
             raise FileNotFoundError(
                 f"PDF file does not exist: {pdf_path}"
             )
 
         result = indexer.index_pdf(
-            pdf_path=pdf_path,
+            pdf_path=str(pdf),
             course_code=course_code,
             unit=unit,
             visibility=visibility,
@@ -134,26 +159,78 @@ def process_pdf_background(
             INGESTION_JOBS[job_id] = {
                 "status": "duplicate",
                 **result,
-                "stored_filename": Path(
-                    pdf_path
-                ).name,
+                "filename": original_filename,
+                "stored_filename": pdf.name,
             }
+
+            try:
+                pdf.unlink()
+            except FileNotFoundError:
+                pass
+
             return
+
+        document_id = result["document_id"]
+        content_hash = result["content_hash"]
+        chunk_count = result.get(
+            "chunks_indexed",
+            0,
+        )
+        stored_filename = result.get(
+            "stored_filename",
+            pdf.name,
+        )
+
+        course = get_course(
+            db,
+            course_code,
+        )
+
+        document = db.scalar(
+            select(Document).where(
+                Document.document_id == document_id
+            )
+        )
+
+        if document is None:
+            document = Document(
+                document_id=document_id,
+                course_id=course.id,
+                original_filename=original_filename,
+                stored_filename=stored_filename,
+                content_hash=content_hash,
+                unit=unit,
+                visibility=visibility,
+                chunk_count=chunk_count,
+                embedding_model=DENSE_MODEL_NAME,
+                embedding_version=EMBEDDING_VERSION,
+                chunking_version=CHUNKING_VERSION,
+                qdrant_collection=COLLECTION_NAME,
+            )
+            db.add(document)
+        else:
+            document.original_filename = original_filename
+            document.stored_filename = stored_filename
+            document.chunk_count = chunk_count
+            document.unit = unit
+            document.visibility = visibility
+
+        db.commit()
 
         INGESTION_JOBS[job_id] = {
             "status": "completed",
             **result,
-            "stored_filename": Path(
-                pdf_path
-            ).name,
         }
 
         logger.info(
-            "Successfully indexed PDF: %s",
+            "Successfully indexed PDF '%s' with %s chunks.",
             original_filename,
+            chunk_count,
         )
 
     except Exception as exc:
+        db.rollback()
+
         logger.exception(
             "PDF ingestion failed: %s",
             original_filename,
@@ -165,10 +242,13 @@ def process_pdf_background(
             "stored_filename": Path(
                 pdf_path
             ).name,
-            "course_code": course_code.upper(),
+            "course_code": course_code,
             "unit": unit,
             "error": str(exc),
         }
+
+    finally:
+        db.close()
 
 
 @router.post("/upload")
@@ -178,6 +258,7 @@ async def upload_document(
     course_code: str = Form(...),
     unit: int = Form(...),
     visibility: str = Form("global"),
+    db: Session = Depends(get_db),
 ):
     normalized_course = (
         course_code.strip().upper()
@@ -188,6 +269,11 @@ async def upload_document(
             status_code=400,
             detail="Course code cannot be empty.",
         )
+
+    course = get_course(
+        db,
+        normalized_course,
+    )
 
     original_filename = safe_filename(
         file.filename or "document.pdf"
@@ -227,14 +313,38 @@ async def upload_document(
         content
     ).hexdigest()
 
+    existing_document = db.scalar(
+        select(Document).where(
+            Document.course_id == course.id,
+            Document.content_hash == content_hash,
+        )
+    )
+
+    if existing_document is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This document is already registered "
+                "for this course."
+            ),
+        )
+
     if indexer.document_exists(
         content_hash=content_hash,
         course_code=normalized_course,
     ):
         raise HTTPException(
             status_code=409,
-            detail="This document is already indexed for this course.",
+            detail=(
+                "This document already exists in "
+                "the vector database for this course."
+            ),
         )
+
+    document_id = generate_document_id(
+        content_hash,
+        normalized_course,
+    )
 
     job_id = hashlib.sha256(
         f"{content_hash}:{normalized_course}".encode(
@@ -256,21 +366,24 @@ async def upload_document(
             "wb",
         ) as f:
             f.write(content)
-
     except OSError as exc:
         logger.exception(
             "Failed to save uploaded PDF."
         )
-
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to save PDF: {exc}",
+            detail=(
+                f"Failed to save PDF: {exc}"
+            ),
         )
 
     if not pdf_path.exists():
         raise HTTPException(
             status_code=500,
-            detail="PDF was uploaded but could not be stored.",
+            detail=(
+                "PDF was uploaded but could not "
+                "be stored."
+            ),
         )
 
     INGESTION_JOBS[job_id] = {
@@ -278,7 +391,9 @@ async def upload_document(
         "filename": original_filename,
         "stored_filename": stored_filename,
         "course_code": normalized_course,
+        "course_id": course.id,
         "unit": unit,
+        "document_id": document_id,
     }
 
     background_tasks.add_task(
@@ -294,9 +409,11 @@ async def upload_document(
     return {
         "status": "queued",
         "job_id": job_id,
+        "document_id": document_id,
         "filename": original_filename,
         "stored_filename": stored_filename,
         "course_code": normalized_course,
+        "course_id": course.id,
         "unit": unit,
     }
 
@@ -309,7 +426,7 @@ def get_ingestion_job(
         job_id
     )
 
-    if not job:
+    if job is None:
         raise HTTPException(
             status_code=404,
             detail="Ingestion job not found.",
@@ -319,75 +436,108 @@ def get_ingestion_job(
 
 
 @router.get("")
-def list_documents():
-    documents = (
-        indexer.get_indexed_documents()
-    )
+def list_documents(
+    db: Session = Depends(get_db),
+):
+    documents = db.scalars(
+        select(Document)
+        .order_by(
+            Document.created_at.desc()
+        )
+    ).all()
+
+    result = []
+
+    for document in documents:
+        result.append(
+            {
+                "id": document.id,
+                "document_id": document.document_id,
+                "course_id": document.course_id,
+                "course_code": (
+                    document.course.code
+                    if document.course
+                    else None
+                ),
+                "original_filename": (
+                    document.original_filename
+                ),
+                "stored_filename": (
+                    document.stored_filename
+                ),
+                "content_hash": (
+                    document.content_hash
+                ),
+                "unit": document.unit,
+                "visibility": document.visibility,
+                "chunk_count": (
+                    document.chunk_count
+                ),
+                "embedding_model": (
+                    document.embedding_model
+                ),
+                "embedding_version": (
+                    document.embedding_version
+                ),
+                "chunking_version": (
+                    document.chunking_version
+                ),
+                "qdrant_collection": (
+                    document.qdrant_collection
+                ),
+                "created_at": (
+                    document.created_at
+                ),
+                "updated_at": (
+                    document.updated_at
+                ),
+            }
+        )
 
     return {
-        "documents": documents,
-        "count": len(documents),
+        "documents": result,
+        "count": len(result),
     }
 
 
 @router.get("/files/{document_id}")
 def serve_document(
     document_id: str,
+    db: Session = Depends(get_db),
 ):
-    point = find_document_point(
-        document_id
+    document = db.scalar(
+        select(Document).where(
+            Document.document_id == document_id
+        )
     )
 
-    if point is None:
+    if document is None:
         raise HTTPException(
             status_code=404,
             detail="Document not found.",
         )
 
-    payload = (
-        point.payload or {}
-    )
-
-    stored_filename = payload.get(
-        "stored_filename"
-    )
-
-    if not stored_filename:
+    if not document.stored_filename:
         raise HTTPException(
             status_code=404,
             detail="Stored PDF information is unavailable.",
         )
 
-    original_filename = payload.get(
-        "original_filename"
-    )
-
-    if not original_filename:
-        original_filename = payload.get(
-            "source",
-            "document.pdf",
-        )
-
-    original_filename = safe_filename(
-        str(original_filename)
-    )
-
     pdf_path = resolve_stored_pdf(
-        str(stored_filename)
+        document.stored_filename
     )
 
     if not pdf_path.exists():
         logger.error(
-            "Qdrant document exists but PDF is missing. "
-            "document_id=%s stored_filename=%s expected_path=%s",
+            "PDF missing for document_id=%s",
             document_id,
-            stored_filename,
-            pdf_path,
         )
-
         raise HTTPException(
             status_code=404,
-            detail="PDF file is no longer available on the server.",
+            detail=(
+                "PDF file is no longer available "
+                "on the server."
+            ),
         )
 
     if not pdf_path.is_file():
@@ -399,10 +549,13 @@ def serve_document(
     return FileResponse(
         path=str(pdf_path),
         media_type="application/pdf",
-        filename=original_filename,
+        filename=safe_filename(
+            document.original_filename
+        ),
         headers={
             "Content-Disposition": (
-                f'inline; filename="{original_filename}"'
+                "inline; "
+                f'filename="{safe_filename(document.original_filename)}"'
             )
         },
     )
@@ -412,51 +565,132 @@ def serve_document(
 def delete_document(
     source: str,
     course_code: str,
+    db: Session = Depends(get_db),
 ):
     normalized_course = (
         course_code.strip().upper()
     )
 
-    documents_to_remove = []
+    course = get_course(
+        db,
+        normalized_course,
+    )
 
-    try:
+    document = db.scalar(
+        select(Document).where(
+            Document.course_id == course.id,
+            Document.original_filename == source,
+        )
+    )
+
+    if document is None:
         documents = (
             indexer.get_indexed_documents()
         )
 
-        for document in documents:
-            document_source = document.get(
+        matching_document = None
+
+        for item in documents:
+            item_source = item.get(
                 "source"
             )
 
-            document_course = str(
-                document.get(
+            item_course = str(
+                item.get(
                     "course_code",
                     "",
                 )
             ).upper()
 
             if (
-                document_source == source
-                and document_course == normalized_course
+                item_source == source
+                and item_course == normalized_course
             ):
-                documents_to_remove.append(
-                    document
-                )
+                matching_document = item
+                break
 
+        if matching_document is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found.",
+            )
+
+        document_id = matching_document.get(
+            "document_id"
+        )
+
+        stored_filename = matching_document.get(
+            "stored_filename"
+        )
+    else:
+        document_id = document.document_id
+        stored_filename = document.stored_filename
+
+    try:
+        qdrant_result = indexer.delete_by_source(
+            source_filename=source,
+            course_code=normalized_course,
+        )
     except Exception as exc:
         logger.exception(
-            "Failed to find document before deletion."
+            "Failed to delete document from Qdrant."
         )
-
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to locate document: {exc}",
+            detail=(
+                "Failed to delete document "
+                f"from vector database: {exc}"
+            ),
         )
 
-    result = indexer.delete_by_source(
-        source_filename=source,
-        course_code=normalized_course,
+    deleted_file = None
+
+    if stored_filename:
+        pdf_path = resolve_stored_pdf(
+            str(stored_filename)
+        )
+
+        try:
+            if pdf_path.exists():
+                pdf_path.unlink()
+                deleted_file = pdf_path.name
+        except OSError as exc:
+            logger.exception(
+                "Failed to delete stored PDF."
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Vectors were deleted, but "
+                    f"the PDF could not be removed: {exc}"
+                ),
+            )
+
+    if document is not None:
+        db.delete(document)
+        db.commit()
+
+    return {
+        "status": "deleted",
+        "message": "Document deleted successfully.",
+        "document_id": document_id,
+        "source": source,
+        "course_code": normalized_course,
+        "deleted_file": deleted_file,
+        "qdrant_result": qdrant_result,
+    }
+
+
+@router.patch("/{document_id}/course")
+def update_document_course(
+    document_id: str,
+    old_course_code: str,
+    new_course_code: str,
+):
+    result = indexer.update_course_code(
+        document_id=document_id,
+        old_course_code=old_course_code,
+        new_course_code=new_course_code,
     )
 
     if result["status"] == "not_found":
@@ -465,36 +699,4 @@ def delete_document(
             detail=result["message"],
         )
 
-    deleted_files = []
-
-    for document in documents_to_remove:
-        stored_filename = document.get(
-            "stored_filename"
-        )
-
-        if not stored_filename:
-            continue
-
-        try:
-            pdf_path = resolve_stored_pdf(
-                str(stored_filename)
-            )
-
-            if pdf_path.exists():
-                pdf_path.unlink()
-                deleted_files.append(
-                    pdf_path.name
-                )
-
-        except Exception:
-            logger.exception(
-                "Failed to delete stored PDF: %s",
-                stored_filename,
-            )
-
-    return {
-        **result,
-        "source": source,
-        "course_code": normalized_course,
-        "deleted_files": deleted_files,
-    }
+    return result

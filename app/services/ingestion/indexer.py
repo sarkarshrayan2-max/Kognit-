@@ -2,10 +2,10 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import uuid
 
 import pymupdf
 from fastembed import SparseTextEmbedding
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -62,6 +62,14 @@ def generate_document_id(
     ).hexdigest()[:32]
 
 
+def generate_point_id(
+    document_id: str,
+    chunk_index: int,
+) -> str:
+    raw = f"kognit:{document_id}:{chunk_index}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
+
+
 class DocumentIndexer:
 
     def __init__(
@@ -83,22 +91,9 @@ class DocumentIndexer:
             model_name=SPARSE_MODEL_NAME
         )
 
-        self.splitter = RecursiveCharacterTextSplitter(
-            chunk_size=CHUNK_SIZE,
-            chunk_overlap=CHUNK_OVERLAP,
-            separators=[
-                "\n\n",
-                "\n",
-                ". ",
-                " ",
-                "",
-            ],
-        )
-
         self._ensure_collection()
 
-    def _ensure_collection(self):
-
+    def _ensure_collection(self) -> None:
         collections = self.client.get_collections()
 
         exists = any(
@@ -107,13 +102,22 @@ class DocumentIndexer:
         )
 
         if exists:
+            logger.info(
+                "Qdrant collection already exists: %s",
+                self.collection_name,
+            )
             return
+
+        dense_dimension = (
+            self.dense_model
+            .get_sentence_embedding_dimension()
+        )
 
         self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config={
                 "dense": VectorParams(
-                    size=self.dense_model.get_sentence_embedding_dimension(),
+                    size=dense_dimension,
                     distance=Distance.COSINE,
                 )
             },
@@ -126,11 +130,15 @@ class DocumentIndexer:
             },
         )
 
+        logger.info(
+            "Created Qdrant collection: %s",
+            self.collection_name,
+        )
+
     def extract_text_from_pdf(
         self,
         pdf_path: str,
     ) -> List[Dict[str, Any]]:
-
         document = None
 
         try:
@@ -142,10 +150,12 @@ class DocumentIndexer:
                 document,
                 start=1,
             ):
+                text = page.get_text("text")
 
-                text = page.get_text(
-                    "text"
-                )
+                if not text:
+                    continue
+
+                text = text.strip()
 
                 if not text:
                     continue
@@ -153,14 +163,13 @@ class DocumentIndexer:
                 pages.append(
                     {
                         "page": page_number,
-                        "text": text.strip(),
+                        "text": text,
                     }
                 )
 
             return pages
 
         finally:
-
             if document is not None:
                 document.close()
 
@@ -170,7 +179,6 @@ class DocumentIndexer:
         chunk_size: int = CHUNK_SIZE,
         overlap: int = CHUNK_OVERLAP,
     ) -> List[str]:
-
         text = text.strip()
 
         if not text:
@@ -182,15 +190,12 @@ class DocumentIndexer:
         text_length = len(text)
 
         while start < text_length:
-
             end = min(
                 start + chunk_size,
                 text_length,
             )
 
-            chunk = text[
-                start:end
-            ].strip()
+            chunk = text[start:end].strip()
 
             if chunk:
                 chunks.append(chunk)
@@ -207,7 +212,6 @@ class DocumentIndexer:
         content_hash: str,
         course_code: Optional[str] = None,
     ) -> bool:
-
         must_conditions = [
             FieldCondition(
                 key="content_hash",
@@ -218,7 +222,6 @@ class DocumentIndexer:
         ]
 
         if course_code:
-
             must_conditions.append(
                 FieldCondition(
                     key="course_code",
@@ -246,7 +249,6 @@ class DocumentIndexer:
         visibility: str = "global",
         original_filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-
         pdf_path = str(pdf_path)
 
         stored_filename = Path(
@@ -258,7 +260,7 @@ class DocumentIndexer:
             or stored_filename
         )
 
-        normalized_course = course_code.upper()
+        normalized_course = course_code.strip().upper()
 
         content_hash = calculate_file_hash(
             pdf_path
@@ -273,7 +275,6 @@ class DocumentIndexer:
             content_hash=content_hash,
             course_code=normalized_course,
         ):
-
             return {
                 "status": "duplicate",
                 "document_id": document_id,
@@ -291,7 +292,6 @@ class DocumentIndexer:
         chunk_index = 0
 
         for page_data in pages:
-
             page_number = page_data["page"]
             page_text = page_data["text"]
 
@@ -300,7 +300,6 @@ class DocumentIndexer:
             )
 
             for chunk in chunks:
-
                 dense_vector = self.dense_model.encode(
                     chunk,
                     normalize_embeddings=True,
@@ -335,10 +334,13 @@ class DocumentIndexer:
                     "chunking_version": CHUNKING_VERSION,
                 }
 
+                point_id = generate_point_id(
+                    document_id,
+                    chunk_index,
+                )
+
                 point = PointStruct(
-                    id=hash(
-                        f"{document_id}:{chunk_index}"
-                    ) & 0x7FFFFFFFFFFFFFFF,
+                    id=point_id,
                     vector={
                         "dense": dense_vector,
                         "sparse": sparse_vector,
@@ -351,7 +353,6 @@ class DocumentIndexer:
                 chunk_index += 1
 
         if points:
-
             self.client.upsert(
                 collection_name=self.collection_name,
                 points=points,
@@ -377,13 +378,11 @@ class DocumentIndexer:
     def get_indexed_documents(
         self,
     ) -> List[Dict[str, Any]]:
-
         records = {}
 
         offset = None
 
         while True:
-
             points, offset = self.client.scroll(
                 collection_name=self.collection_name,
                 limit=100,
@@ -393,7 +392,6 @@ class DocumentIndexer:
             )
 
             for point in points:
-
                 payload = point.payload or {}
 
                 document_id = payload.get(
@@ -417,7 +415,6 @@ class DocumentIndexer:
                 )
 
                 if key not in records:
-
                     records[key] = {
                         "document_id": document_id,
                         "content_hash": payload.get(
@@ -456,12 +453,68 @@ class DocumentIndexer:
             records.values()
         )
 
+    def update_course_code(
+        self,
+        document_id: str,
+        old_course_code: str,
+        new_course_code: str,
+    ) -> Dict[str, Any]:
+        old_course_code = old_course_code.strip().upper()
+        new_course_code = new_course_code.strip().upper()
+
+        target_filter = Filter(
+            must=[
+                FieldCondition(
+                    key="document_id",
+                    match=MatchValue(
+                        value=document_id,
+                    ),
+                ),
+                FieldCondition(
+                    key="course_code",
+                    match=MatchValue(
+                        value=old_course_code,
+                    ),
+                ),
+            ]
+        )
+
+        points_count = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=target_filter,
+            exact=True,
+        ).count
+
+        if points_count == 0:
+            return {
+                "updated": 0,
+                "status": "not_found",
+                "message": "No matching document found.",
+            }
+
+        self.client.set_payload(
+            collection_name=self.collection_name,
+            payload={
+                "course_code": new_course_code,
+            },
+            points=FilterSelector(
+                filter=target_filter,
+            ),
+        )
+
+        return {
+            "updated": points_count,
+            "status": "success",
+            "document_id": document_id,
+            "old_course_code": old_course_code,
+            "new_course_code": new_course_code,
+        }
+
     def delete_by_source(
         self,
         source_filename: str,
         course_code: Optional[str] = None,
     ) -> Dict[str, Any]:
-
         must_conditions = [
             FieldCondition(
                 key="source",
@@ -472,7 +525,6 @@ class DocumentIndexer:
         ]
 
         if course_code:
-
             must_conditions.append(
                 FieldCondition(
                     key="course_code",
@@ -493,7 +545,6 @@ class DocumentIndexer:
         ).count
 
         if points_count == 0:
-
             return {
                 "deleted": 0,
                 "status": "not_found",

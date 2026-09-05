@@ -12,34 +12,27 @@ dependencies = [
     "pydantic-settings",
     "python-multipart",
     "python-dotenv",
-
     "langgraph",
     "langchain-core",
     "langchain-text-splitters",
     "langsmith",
-
     "groq",
-
     "qdrant-client",
     "fastembed",
-
     "sentence-transformers",
     "transformers",
     "torch",
-
     "pymupdf",
-
     "tavily-python",
-
     "numpy",
     "scikit-learn",
-
     "psycopg[binary]",
     "sqlalchemy",
-
     "redis",
-
     "streamlit",
+    "python-jose[cryptography]>=3.5.0",
+    "passlib[bcrypt]>=1.7.4",
+    "email-validator>=2.3.0",
 ]
 
 

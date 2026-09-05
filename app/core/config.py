@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     redis_host: str = "localhost"
     redis_port: int = 6379
 
+    jwt_secret_key: str = "CHANGE_THIS_IN_PRODUCTION"
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60 * 24
+
     groq_api_key: str | None = None
 
     groq_model: str = "qwen/qwen3.6-27b"
