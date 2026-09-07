@@ -1,6 +1,6 @@
 import json
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import redis
@@ -45,7 +45,7 @@ class SessionManager:
         role: str,
         content: str,
         course_code: str,
-        metadata: Optional[Dict] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
 
         key = self._session_key(
@@ -133,7 +133,7 @@ class SessionManager:
         self,
         user_id: UUID | str,
         session_id: str,
-        state: Dict,
+        state: Dict[str, Any],
     ) -> None:
 
         key = self._state_key(
@@ -144,14 +144,17 @@ class SessionManager:
         self.redis.setex(
             key,
             self.ttl_seconds,
-            json.dumps(state),
+            json.dumps(
+                state,
+                ensure_ascii=False,
+            ),
         )
 
     def get_state(
         self,
         user_id: UUID | str,
         session_id: str,
-    ) -> Optional[Dict]:
+    ) -> Optional[Dict[str, Any]]:
 
         key = self._state_key(
             user_id,
@@ -164,7 +167,13 @@ class SessionManager:
             return None
 
         try:
-            return json.loads(value)
+            state = json.loads(value)
+
+            if not isinstance(state, dict):
+                return None
+
+            return state
+
         except json.JSONDecodeError:
             return None
 

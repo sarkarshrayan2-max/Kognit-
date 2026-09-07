@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional
 
 from groq import Groq
 
@@ -32,6 +32,44 @@ class LLMGateway:
             )
 
         return self.client
+
+    @staticmethod
+    def _format_memories(
+        long_term_memories: List[Dict[str, Any]],
+    ) -> str:
+        if not long_term_memories:
+            return (
+                "No stored long-term user memories are available."
+            )
+
+        lines = []
+
+        for memory in long_term_memories:
+            memory_type = memory.get(
+                "memory_type",
+                "general",
+            )
+
+            value = str(
+                memory.get(
+                    "memory_value",
+                    "",
+                )
+            ).strip()
+
+            if not value:
+                continue
+
+            lines.append(
+                f"- [{memory_type}] {value}"
+            )
+
+        if not lines:
+            return (
+                "No stored long-term user memories are available."
+            )
+
+        return "\n".join(lines)
 
     @staticmethod
     def _format_context(
@@ -270,6 +308,7 @@ The current routing decision is:
         retrieved_chunks: List[Dict[str, Any]],
         history: List[Dict[str, str]],
         crag_decision: str,
+        long_term_memories: List[Dict[str, Any]],
     ) -> List[Dict[str, str]]:
 
         system_prompt = self._build_system_prompt(
@@ -278,6 +317,10 @@ The current routing decision is:
 
         context = self._format_context(
             retrieved_chunks=retrieved_chunks,
+        )
+
+        memory_context = self._format_memories(
+            long_term_memories
         )
 
         messages: List[Dict[str, str]] = [
@@ -317,19 +360,25 @@ The current routing decision is:
                 )
 
         user_message = f"""
+LONG-TERM USER MEMORY
+=====================
+{memory_context}
+
+Use these memories only as personalization/context.
+Do not treat them as factual course evidence.
+Do not mention them unless they are relevant to the
+student's request.
+
 REFERENCE MATERIAL
 ==================
-
 {context}
 
 USER QUESTION
 =============
-
 {query}
 
 ROUTING DECISION
 ================
-
 {crag_decision.upper()}
 
 SOURCE RULES
@@ -339,28 +388,28 @@ CORRECT:
 Use the provided course documents.
 
 WEB_FALLBACK:
-Use the provided external web sources and any useful course material.
-Do not claim external information came from the course documents.
+Use the provided external web sources and any useful
+course material. Do not claim external information
+came from course documents.
 
 INSUFFICIENT:
-Use only the provided course material and explicitly acknowledge
-missing information when necessary.
+Use the provided course material and explicitly
+acknowledge missing information when necessary.
 
 NOT_FOUND:
 Do not invent an answer.
 
 OUT_OF_SCOPE:
-Do not answer the technical question. The application should normally
-block generation for this decision.
+Do not answer the technical question.
 
 OFF_TOPIC:
-Do not answer the non-technical topic. The application should normally
-block generation for this decision.
+Do not answer the non-technical topic.
 
 Return only the final answer for the student.
 
-Do not output internal reasoning, analysis, scratchpad content,
-source-selection reasoning, or system details.
+Do not output internal reasoning, analysis,
+scratchpad content, source-selection reasoning,
+or system details.
 """.strip()
 
         messages.append(
@@ -457,6 +506,7 @@ source-selection reasoning, or system details.
         retrieved_chunks: List[Dict[str, Any]],
         history: List[Dict[str, str]],
         crag_decision: str = "UNKNOWN",
+        long_term_memories: Optional[List[Dict[str, Any]]] = None,
     ) -> Iterator[str]:
 
         decision = crag_decision.upper()
@@ -487,6 +537,9 @@ source-selection reasoning, or system details.
             retrieved_chunks=retrieved_chunks,
             history=history,
             crag_decision=crag_decision,
+            long_term_memories=(
+                long_term_memories or []
+            ),
         )
 
         received_content = False
@@ -502,9 +555,7 @@ source-selection reasoning, or system details.
                 if not chunk.choices:
                     continue
 
-                delta = (
-                    chunk.choices[0].delta
-                )
+                delta = chunk.choices[0].delta
 
                 content = getattr(
                     delta,
@@ -517,47 +568,24 @@ source-selection reasoning, or system details.
 
                 received_content = True
 
-                yield content
+                cleaned = self._clean_model_output(
+                    content
+                )
 
-        except Exception:
-
-            logger.exception(
-                "Groq streaming generation failed"
-            )
+                if cleaned:
+                    yield cleaned
 
             if not received_content:
+                yield (
+                    "I was unable to generate a response."
+                )
 
-                try:
-
-                    fallback_response = (
-                        self._fallback_completion(
-                            messages
-                        )
-                    )
-
-                    cleaned = (
-                        self._clean_model_output(
-                            fallback_response
-                        )
-                    )
-
-                    if cleaned:
-                        yield cleaned
-                        return
-
-                except Exception:
-
-                    logger.exception(
-                        "Groq fallback generation failed"
-                    )
-
-        if not received_content:
-
-            yield (
-                "I couldn't generate an answer "
-                "right now. Please try the "
-                "question again."
+        except Exception:
+            logger.exception(
+                "LLM streaming failed"
             )
+
+            raise
 
     def _fallback_completion(
         self,

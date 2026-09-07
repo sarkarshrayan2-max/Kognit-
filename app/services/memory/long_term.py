@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.memory import LongTermMemory
@@ -43,28 +43,34 @@ class LongTermMemoryService:
         limit: int = 20,
     ) -> list[LongTermMemory]:
 
+        now = datetime.now(timezone.utc)
+
         statement = (
             select(LongTermMemory)
             .where(
                 LongTermMemory.user_id == user_id,
+
+                
+                or_(
+                    LongTermMemory.expires_at.is_(None),
+                    LongTermMemory.expires_at > now,
+                ),
             )
             .order_by(
                 LongTermMemory.importance.desc(),
                 LongTermMemory.updated_at.desc(),
             )
-            .limit(limit)
+            .limit(max(1, min(limit, 100)))
         )
 
         if memory_type:
             statement = statement.where(
-                LongTermMemory.memory_type == memory_type,
+                LongTermMemory.memory_type == memory_type
             )
 
-        memories = list(
+        return list(
             db.scalars(statement).all()
         )
-
-        return memories
 
     def get_memory(
         self,
@@ -73,9 +79,12 @@ class LongTermMemoryService:
         memory_key: str,
     ) -> LongTermMemory | None:
 
-        statement = select(LongTermMemory).where(
-            LongTermMemory.user_id == user_id,
-            LongTermMemory.memory_key == memory_key,
+        statement = (
+            select(LongTermMemory)
+            .where(
+                LongTermMemory.user_id == user_id,
+                LongTermMemory.memory_key == memory_key,
+            )
         )
 
         return db.scalar(statement)
@@ -109,9 +118,7 @@ class LongTermMemoryService:
     ) -> LongTermMemory:
 
         memory.access_count += 1
-        memory.updated_at = datetime.now(
-            timezone.utc
-        )
+        memory.updated_at = datetime.now(timezone.utc)
 
         db.commit()
         db.refresh(memory)

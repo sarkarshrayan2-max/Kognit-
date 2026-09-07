@@ -24,9 +24,7 @@ router = APIRouter(
     tags=["Chat"],
 )
 
-logger = logging.getLogger(
-    "kognit.chat"
-)
+logger = logging.getLogger("kognit.chat")
 
 
 def sse_event(
@@ -67,6 +65,11 @@ async def chat_stream_endpoint(
         )
     )
 
+    previous_state = session_manager.get_state(
+        current_user.id,
+        session_id,
+    ) or {}
+
     if server_history:
         history = server_history
     else:
@@ -87,11 +90,36 @@ async def chat_stream_endpoint(
             for message in (payload.history or [])
         ]
 
+    if (
+        not history
+        and previous_state.get(
+            "course_code",
+            "",
+        ).upper()
+        == payload.course_code.upper()
+    ):
+        previous_query = previous_state.get("query")
+        previous_answer = previous_state.get("answer")
+
+        if previous_query and previous_answer:
+            history = [
+                {
+                    "role": "user",
+                    "content": previous_query,
+                },
+                {
+                    "role": "assistant",
+                    "content": previous_answer,
+                },
+            ]
+
     initial_state = {
         "query": payload.query,
         "course_code": payload.course_code,
         "history": history,
         "top_k": payload.top_k or 3,
+        "user_id": str(current_user.id),
+        "previous_state": previous_state,
     }
 
     async def event_generator() -> AsyncIterator[str]:
@@ -106,6 +134,11 @@ async def chat_stream_endpoint(
             async for chunk in (
                 kognit_graph.astream(
                     initial_state,
+                    config={
+                        "configurable": {
+                            "db": db,
+                        }
+                    },
                     stream_mode=[
                         "custom",
                         "updates",
@@ -113,31 +146,18 @@ async def chat_stream_endpoint(
                     version="v2",
                 )
             ):
-                chunk_type = chunk.get(
-                    "type"
-                )
+                chunk_type = chunk.get("type")
 
                 if chunk_type == "custom":
-                    data = chunk.get(
-                        "data",
-                        {},
-                    )
+                    data = chunk.get("data", {})
 
-                    if not isinstance(
-                        data,
-                        dict,
-                    ):
+                    if not isinstance(data, dict):
                         continue
 
-                    if data.get(
-                        "type"
-                    ) != "token":
+                    if data.get("type") != "token":
                         continue
 
-                    content = data.get(
-                        "content",
-                        "",
-                    )
+                    content = data.get("content", "")
 
                     if not content:
                         continue
@@ -156,57 +176,36 @@ async def chat_stream_endpoint(
                 if chunk_type != "updates":
                     continue
 
-                update_data = chunk.get(
-                    "data",
-                    {},
-                )
+                update_data = chunk.get("data", {})
 
-                if not isinstance(
-                    update_data,
-                    dict,
-                ):
+                if not isinstance(update_data, dict):
                     continue
 
-                for (
-                    node_name,
-                    node_update,
-                ) in update_data.items():
-
-                    if not isinstance(
-                        node_update,
-                        dict,
-                    ):
+                for node_name, node_update in update_data.items():
+                    if not isinstance(node_update, dict):
                         continue
 
                     if node_name == "condenser":
-                        standalone_query = (
-                            node_update.get(
-                                "standalone_query",
-                                standalone_query,
-                            )
+                        standalone_query = node_update.get(
+                            "standalone_query",
+                            standalone_query,
                         )
                         continue
 
                     if node_name == "crag":
-                        decision = (
-                            node_update.get(
-                                "crag_decision",
-                                "UNKNOWN",
-                            )
+                        decision = node_update.get(
+                            "crag_decision",
+                            "UNKNOWN",
                         )
 
-                        citations = (
-                            node_update.get(
-                                "citations",
-                                [],
-                            )
+                        citations = node_update.get(
+                            "citations",
+                            [],
                         )
 
-                        response_type = (
-                            node_update.get(
-                                "response_type",
-                                "TECHNICAL",
-                            )
+                        response_type = node_update.get(
+                            "response_type",
+                            "TECHNICAL",
                         )
 
                         if not metadata_sent:
@@ -217,50 +216,33 @@ async def chat_stream_endpoint(
                                     "type": "metadata",
                                     "crag_decision": decision,
                                     "citations": citations,
-                                    "model_used": (
-                                        llm_gateway.model_name
-                                    ),
-                                    "standalone_query": (
-                                        standalone_query
-                                    ),
-                                    "response_type": (
-                                        response_type
-                                    ),
+                                    "model_used": llm_gateway.model_name,
+                                    "standalone_query": standalone_query,
+                                    "response_type": response_type,
                                 }
                             )
 
                         continue
 
-                    if (
-                        node_name
-                        == "conversational_handler"
-                    ):
-                        response_type = (
-                            node_update.get(
-                                "response_type",
-                                "CONVERSATIONAL",
-                            )
+                    if node_name == "conversational_handler":
+                        response_type = node_update.get(
+                            "response_type",
+                            "CONVERSATIONAL",
                         )
 
-                        decision = (
-                            node_update.get(
-                                "crag_decision",
-                                "CONVERSATIONAL",
-                            )
+                        decision = node_update.get(
+                            "crag_decision",
+                            "CONVERSATIONAL",
                         )
 
-                        citations = (
-                            node_update.get(
-                                "citations",
-                                [],
-                            )
+                        citations = node_update.get(
+                            "citations",
+                            [],
                         )
 
-                        answer = (
-                            node_update.get(
-                                "answer",
-                                "",
-                            )
+                        answer = node_update.get(
+                            "answer",
+                            "",
                         )
 
                         if not metadata_sent:
@@ -271,22 +253,13 @@ async def chat_stream_endpoint(
                                     "type": "metadata",
                                     "crag_decision": decision,
                                     "citations": citations,
-                                    "model_used": (
-                                        llm_gateway.model_name
-                                    ),
-                                    "standalone_query": (
-                                        standalone_query
-                                    ),
-                                    "response_type": (
-                                        response_type
-                                    ),
+                                    "model_used": llm_gateway.model_name,
+                                    "standalone_query": standalone_query,
+                                    "response_type": response_type,
                                 }
                             )
 
-                        if (
-                            answer
-                            and not accumulated_answer
-                        ):
+                        if answer and not accumulated_answer:
                             accumulated_answer = answer
 
                             yield sse_event(
@@ -299,20 +272,13 @@ async def chat_stream_endpoint(
                         continue
 
                     if node_name == "generator":
-                        final_answer = (
-                            node_update.get(
-                                "answer",
-                                "",
-                            )
+                        final_answer = node_update.get(
+                            "answer",
+                            "",
                         )
 
-                        if (
-                            final_answer
-                            and not accumulated_answer
-                        ):
-                            accumulated_answer = (
-                                final_answer
-                            )
+                        if final_answer and not accumulated_answer:
+                            accumulated_answer = final_answer
 
                             yield sse_event(
                                 {
@@ -338,9 +304,7 @@ async def chat_stream_endpoint(
                         "citations": citations,
                         "crag_decision": decision,
                         "response_type": response_type,
-                        "standalone_query": (
-                            standalone_query
-                        ),
+                        "standalone_query": standalone_query,
                     },
                 )
 
@@ -365,36 +329,49 @@ async def chat_stream_endpoint(
                     },
                 )
 
-                extracted_memories = (
-                    memory_extractor.extract(
-                        payload.query
-                    )
+                redis_state = {
+                    "user_id": str(current_user.id),
+                    "session_id": session_id,
+                    "course_code": payload.course_code,
+                    "query": payload.query,
+                    "intent": (
+                        response_type
+                        if response_type in {
+                            "CONVERSATIONAL",
+                            "OFF_TOPIC",
+                            "OUT_OF_SCOPE",
+                        }
+                        else "TECHNICAL"
+                    ),
+                    "standalone_query": standalone_query,
+                    "response_type": response_type,
+                    "crag_decision": decision,
+                    "citations": citations,
+                    "answer": accumulated_answer,
+                }
+
+                session_manager.set_state(
+                    current_user.id,
+                    session_id,
+                    redis_state,
                 )
 
+                extracted_memories = memory_extractor.extract(payload.query)
+
                 for memory in extracted_memories:
-                    existing_memory = (
-                        long_term_memory.get_memory(
-                            db=db,
-                            user_id=current_user.id,
-                            memory_key=memory.memory_key,
-                        )
+                    existing_memory = long_term_memory.get_memory(
+                        db=db,
+                        user_id=current_user.id,
+                        memory_key=memory.memory_key,
                     )
 
                     if existing_memory:
-                        existing_memory.memory_value = (
-                            memory.memory_value
-                        )
-                        existing_memory.memory_type = (
-                            memory.memory_type
-                        )
-                        existing_memory.importance = (
-                            memory.importance
-                        )
+                        existing_memory.memory_value = memory.memory_value
+                        existing_memory.memory_type = memory.memory_type
+                        existing_memory.importance = memory.importance
 
                         db.commit()
-                        db.refresh(
-                            existing_memory
-                        )
+                        db.refresh(existing_memory)
 
                     else:
                         long_term_memory.save_memory(
@@ -408,14 +385,12 @@ async def chat_stream_endpoint(
 
             yield sse_event(
                 {
-                    "type": "done"
+                    "type": "done",
                 }
             )
 
         except Exception:
-            logger.exception(
-                "LangGraph streaming failed"
-            )
+            logger.exception("LangGraph streaming failed")
 
             yield sse_event(
                 {
@@ -439,9 +414,7 @@ async def chat_stream_endpoint(
     )
 
 
-@router.delete(
-    "/session/{session_id}"
-)
+@router.delete("/session/{session_id}")
 def clear_session_endpoint(
     session_id: str,
     current_user: User = Depends(get_current_user),

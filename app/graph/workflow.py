@@ -1,15 +1,17 @@
 import hashlib
 import logging
+import uuid
 from typing import Any, Dict, List, Optional, TypedDict
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from app.services.llm.gateway import LLMGateway
+from app.services.memory.long_term import long_term_memory
 from app.services.rag.condenser import QueryCondenser
 from app.services.rag.crag import CRAGEvaluator
 from app.services.retrieval.fusion import HybridRetriever
-
 
 logger = logging.getLogger("kognit.workflow")
 
@@ -24,20 +26,36 @@ class GraphState(TypedDict, total=False):
     course_code: str
     history: List[Dict[str, str]]
     top_k: int
+
+    # Query understanding
     intent: str
     standalone_query: str
+
+    # Response
     response_type: str
+    answer: Optional[str]
+
+    # Retrieval
     local_chunks: List[Dict[str, Any]]
     final_context: List[Dict[str, Any]]
+
+    # CRAG
     crag_decision: str
     citations: List[Dict[str, Any]]
-    answer: Optional[str]
+
+    # User context
+    user_id: str
+
+    # PostgreSQL long-term memory
+    long_term_memories: List[Dict[str, Any]]
+
+    # Redis short-term graph state
+    previous_state: Dict[str, Any]
 
 
 def condense_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     intent, standalone_query = condenser.analyze(
         query=state["query"],
         history=state.get("history", []),
@@ -63,7 +81,6 @@ def condense_node(
 def conversational_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     answer = (
         "Understood! Let me know if you want to explore "
         "more examples or dive into another topic."
@@ -127,7 +144,6 @@ def off_topic_node(
 def out_of_scope_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     course_code = state.get(
         "course_code",
         "the selected course",
@@ -157,10 +173,82 @@ def out_of_scope_node(
     }
 
 
+def memory_retrieval_node(
+    state: GraphState,
+    config: RunnableConfig,
+) -> Dict[str, Any]:
+    """
+    Retrieve durable user memories from PostgreSQL.
+
+    PostgreSQL = long-term memory.
+    Redis is NOT used here.
+    """
+
+    configurable = config.get(
+        "configurable",
+        {},
+    )
+
+    db = configurable.get("db")
+
+    user_id = state.get(
+        "user_id"
+    )
+
+    if db is None or not user_id:
+        logger.warning(
+            "Long-term memory retrieval skipped: "
+            "db/user_id missing"
+        )
+
+        return {
+            "long_term_memories": []
+        }
+
+    try:
+        memories = long_term_memory.get_memories(
+            db=db,
+            user_id=uuid.UUID(
+                str(user_id)
+            ),
+            limit=5,
+        )
+
+        serialized = []
+
+        for memory in memories:
+            serialized.append(
+                {
+                    "memory_key": memory.memory_key,
+                    "memory_value": memory.memory_value,
+                    "memory_type": memory.memory_type,
+                    "importance": memory.importance,
+                }
+            )
+
+        logger.info(
+            "Retrieved %d long-term memories for user=%s",
+            len(serialized),
+            user_id,
+        )
+
+        return {
+            "long_term_memories": serialized
+        }
+
+    except Exception:
+        logger.exception(
+            "Long-term memory retrieval failed"
+        )
+
+        return {
+            "long_term_memories": []
+        }
+
+
 def retrieve_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     top_k = state.get("top_k", 3)
 
     chunks = retriever.search(
@@ -183,7 +271,6 @@ def retrieve_node(
 def deduplicate_chunks(
     chunks: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-
     unique = {}
 
     for chunk in chunks:
@@ -241,7 +328,6 @@ def deduplicate_chunks(
 def crag_eval_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     decision, routed_context = crag_evaluator.evaluate_and_route(
         query=state["standalone_query"],
         local_chunks=state.get("local_chunks", []),
@@ -313,7 +399,6 @@ def crag_eval_node(
 def generation_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-
     decision = state.get(
         "crag_decision",
         "UNKNOWN",
@@ -344,7 +429,8 @@ def generation_node(
         )
 
         return {
-            "answer": answer
+            "answer": answer,
+            "response_type": "TECHNICAL",
         }
 
     writer = get_stream_writer()
@@ -352,10 +438,17 @@ def generation_node(
 
     try:
         for token in llm_gateway.stream_answer(
-            query=state["query"],
+            query=state.get("standalone_query", state.get("query", "")),
             retrieved_chunks=final_context,
-            history=state.get("history", []),
+            history=state.get(
+                "history",
+                [],
+            ),
             crag_decision=decision,
+            long_term_memories=state.get(
+                "long_term_memories",
+                [],
+            ),
         ):
             if not token:
                 continue
@@ -387,18 +480,19 @@ def generation_node(
         )
 
         return {
-            "answer": error_message
+            "answer": error_message,
+            "response_type": "TECHNICAL",
         }
 
     return {
-        "answer": "".join(answer_parts)
+        "answer": "".join(answer_parts),
+        "response_type": "TECHNICAL",
     }
 
 
 def route_by_intent(
     state: GraphState,
 ) -> str:
-
     intent = state.get("intent")
 
     if intent == "CONVERSATIONAL":
@@ -433,6 +527,11 @@ workflow.add_node(
 )
 
 workflow.add_node(
+    "memory_retrieval",
+    memory_retrieval_node,
+)
+
+workflow.add_node(
     "retriever",
     retrieve_node,
 )
@@ -456,23 +555,15 @@ workflow.add_conditional_edges(
     "condenser",
     route_by_intent,
     {
-        "handle_conversational":
-            "conversational_handler",
-        "handle_off_topic":
-            "off_topic_handler",
-        "execute_retrieval":
-            "retriever",
+        "handle_conversational": "conversational_handler",
+        "handle_off_topic": "off_topic_handler",
+        "execute_retrieval": "memory_retrieval",
     },
 )
 
 workflow.add_edge(
-    "conversational_handler",
-    END,
-)
-
-workflow.add_edge(
-    "off_topic_handler",
-    END,
+    "memory_retrieval",
+    "retriever",
 )
 
 workflow.add_edge(
@@ -487,6 +578,16 @@ workflow.add_edge(
 
 workflow.add_edge(
     "generator",
+    END,
+)
+
+workflow.add_edge(
+    "conversational_handler",
+    END,
+)
+
+workflow.add_edge(
+    "off_topic_handler",
     END,
 )
 
