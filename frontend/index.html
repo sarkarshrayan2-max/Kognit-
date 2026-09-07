@@ -12,7 +12,7 @@
         rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
-    <!-- KaTeX: renders LaTeX math such as $\\forall$, $\\exists$, $\\beta$, etc. -->
+    <!-- KaTeX: renders LaTeX math such as \forall, \exists, \beta, etc. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/contrib/auto-render.min.js"></script>
@@ -164,14 +164,22 @@
         }
 
         .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            width: 100%;
+            min-width: 0;
             padding: 8px 10px;
             border-radius: 8px;
             color: var(--ink-soft);
             font-size: 13px;
+            font-family: inherit;
             cursor: pointer;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            text-align: left;
+            border: none;
+            background: transparent;
+            transition: background 0.12s ease, color 0.12s ease;
         }
 
         .history-item:hover {
@@ -183,6 +191,55 @@
             background: var(--accent-soft);
             color: var(--ink);
             font-weight: 500;
+        }
+
+        .history-item-title {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .history-delete {
+            flex: 0 0 auto;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 0;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--ink-faint);
+            cursor: pointer;
+            opacity: 0;
+            transition:
+                opacity 0.15s ease,
+                background 0.15s ease,
+                color 0.15s ease;
+        }
+
+        .history-item:hover .history-delete,
+        .history-item:focus-within .history-delete {
+            opacity: 1;
+        }
+
+        .history-delete:hover {
+            background: #f3e8e8;
+            color: #a64444;
+        }
+
+        .history-delete svg {
+            width: 14px;
+            height: 14px;
+            pointer-events: none;
+        }
+
+        @media (max-width: 700px) {
+            .history-delete {
+                opacity: 1;
+            }
         }
 
         .sidebar-foot {
@@ -330,16 +387,133 @@
             background: var(--bg);
         }
 
-        /* Mathematical expressions */
+        /* Markdown & Content Styling */
+        .answer {
+            line-height: 1.65;
+            overflow-wrap: anywhere;
+            word-break: normal;
+        }
+
+        .answer p {
+            margin: 0 0 12px;
+        }
+
+        .answer p:last-child {
+            margin-bottom: 0;
+        }
+
+        .answer h1,
+        .answer h2,
+        .answer h3,
+        .answer h4 {
+            margin: 18px 0 10px;
+            line-height: 1.3;
+        }
+
+        .answer h1 {
+            font-size: 22px;
+        }
+
+        .answer h2 {
+            font-size: 19px;
+        }
+
+        .answer h3 {
+            font-size: 16px;
+        }
+
+        .answer h4 {
+            font-size: 14.5px;
+        }
+
+        .answer ul,
+        .answer ol {
+            margin: 8px 0 14px 22px;
+            padding: 0;
+        }
+
+        .answer li {
+            margin: 4px 0;
+        }
+
+        .answer strong {
+            font-weight: 600;
+        }
+
+        .answer em {
+            font-style: italic;
+        }
+
+        .answer blockquote {
+            border-left: 3px solid var(--border);
+            margin: 12px 0;
+            padding: 4px 0 4px 14px;
+            color: var(--ink-soft);
+        }
+
+        .answer code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9em;
+            background: var(--code-bg);
+            padding: 2px 5px;
+            border-radius: 4px;
+        }
+
+        .answer pre {
+            margin: 12px 0 16px;
+            padding: 13px 14px;
+            overflow-x: auto;
+            background: var(--code-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .answer pre code {
+            background: transparent;
+            padding: 0;
+            white-space: pre;
+        }
+
+        .answer table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 14px 0 18px;
+            font-size: 13px;
+            overflow: hidden;
+        }
+
+        .answer th,
+        .answer td {
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .answer th {
+            background: var(--accent-soft);
+            font-weight: 600;
+        }
+
+        .answer hr {
+            border: 0;
+            border-top: 1px solid var(--border);
+            margin: 18px 0;
+        }
+
+        .answer a {
+            color: var(--accent);
+            text-decoration: underline;
+        }
+
         .answer .katex {
-            font-size: 1.05em;
+            font-size: 1em;
         }
 
         .answer .katex-display {
             overflow-x: auto;
             overflow-y: hidden;
             padding: 8px 0;
-            margin: 14px 0;
         }
 
         /* Message Formatting */
@@ -417,16 +591,13 @@
             font-size: 12px;
             color: var(--ink-soft);
             cursor: pointer;
+            transition: border-color .15s ease, background .15s ease;
         }
 
         .source-chip:hover {
             border-color: var(--ink-faint);
             color: var(--ink);
             background: var(--bg);
-        }
-
-        .source-chip {
-            transition: border-color .15s ease, background .15s ease;
         }
 
         .source-chip.course-source {
@@ -822,12 +993,217 @@
             padding-left: 12px;
             white-space: pre-wrap;
         }
+
+        /* =========================
+           AUTHENTICATION
+           ========================= */
+
+        .auth-screen {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            z-index: 1000;
+            padding: 24px;
+        }
+
+        .auth-card {
+            width: min(420px, 100%);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 28px;
+            box-shadow: 0 12px 40px rgba(30, 30, 28, 0.06);
+        }
+
+        .auth-brand {
+            font-family: "Fraunces", serif;
+            font-size: 30px;
+            margin-bottom: 4px;
+        }
+
+        .auth-subtitle {
+            color: var(--ink-soft);
+            line-height: 1.5;
+            margin: 0 0 22px;
+        }
+
+        .auth-tabs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 18px;
+        }
+
+        .auth-tab {
+            border: none;
+            background: transparent;
+            padding: 8px;
+            border-radius: 6px;
+            color: var(--ink-soft);
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .auth-tab.active {
+            background: var(--surface);
+            color: var(--ink);
+            font-weight: 600;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+
+        .auth-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 13px;
+        }
+
+        .auth-field label {
+            font-size: 12px;
+            color: var(--ink-soft);
+            font-weight: 500;
+        }
+
+        .auth-field input {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 11px;
+            background: var(--surface);
+            color: var(--ink);
+            font: inherit;
+            outline: none;
+        }
+
+        .auth-field input:focus {
+            border-color: var(--ink-faint);
+        }
+
+        .auth-submit {
+            width: 100%;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 12px;
+            background: var(--accent);
+            color: var(--accent-ink);
+            font: inherit;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+
+        .auth-submit:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
+
+        .auth-error {
+            display: none;
+            margin: 0 0 13px;
+            padding: 9px 10px;
+            border-radius: 7px;
+            background: var(--danger-soft);
+            color: var(--danger);
+            font-size: 12.5px;
+            line-height: 1.4;
+        }
+
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .user-name {
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 12.5px;
+            color: var(--ink-soft);
+        }
+
+        .logout-btn {
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--ink-soft);
+            border-radius: 7px;
+            padding: 6px 9px;
+            font: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .logout-btn:hover {
+            background: var(--bg);
+            color: var(--ink);
+        }
+
+        .app.locked {
+            display: none;
+        }
+
+        @media (max-width: 720px) {
+            .user-name {
+                display: none;
+            }
+        }
     </style>
 </head>
 
 <body>
 
-    <div class="app" id="app">
+    <!-- Authentication Screen -->
+    <div class="auth-screen" id="authScreen">
+        <div class="auth-card">
+            <div class="auth-brand">kognit</div>
+            <p class="auth-subtitle">
+                Academic assistant for your indexed course materials.
+            </p>
+
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="loginTab" type="button">
+                    Login
+                </button>
+                <button class="auth-tab" id="registerTab" type="button">
+                    Register
+                </button>
+            </div>
+
+            <form id="authForm">
+                <div class="auth-field" id="nameField" style="display: none;">
+                    <label for="authName">Name</label>
+                    <input id="authName" type="text" maxlength="255" autocomplete="name">
+                </div>
+
+                <div class="auth-field">
+                    <label for="authEmail">Email</label>
+                    <input id="authEmail" type="email" required autocomplete="email">
+                </div>
+
+                <div class="auth-field">
+                    <label for="authPassword">Password</label>
+                    <input id="authPassword" type="password" required minlength="8" autocomplete="current-password">
+                </div>
+
+                <div class="auth-error" id="authError"></div>
+
+                <button class="auth-submit" id="authSubmit" type="submit">
+                    Login
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Application Root -->
+    <div class="app locked" id="app">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-inner">
@@ -851,7 +1227,7 @@
                     </button>
                 </div>
 
-                <button class="new-chat" id="newChatBtn">
+                <button class="new-chat" id="newChatBtn" type="button">
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                         <path d="M7 1V13M1 7H13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
                     </svg>
@@ -882,16 +1258,16 @@
                     </button>
                     <div class="topbar-title" id="topbarTitle">New session</div>
                 </div>
+
                 <div class="course-select-wrap">
                     <select class="course-select" id="courseSelect">
-                        <option value="DBMS">DBMS</option>
-                        <option value="COA">COA</option>
-                        <option value="OS">OS</option>
-                        <option value="DSP">DSP</option>
-                        <option value="CIRCUITS">CIRCUITS</option>
-                        <option value="EMT">EMT</option>
-                        <option value="IOT">IOT</option>
+                        <option value="">Loading courses...</option>
                     </select>
+                </div>
+
+                <div class="user-menu">
+                    <span class="user-name" id="userName">User</span>
+                    <button class="logout-btn" id="logoutBtn" type="button">Logout</button>
                 </div>
             </div>
 
@@ -961,13 +1337,7 @@
                         <form class="upload-form" id="uploadForm">
                             <input type="file" id="uploadFile" accept=".pdf" class="form-control" required />
                             <select id="uploadCourse" class="form-control" required>
-                                <option value="DBMS">DBMS</option>
-                                <option value="COA">COA</option>
-                                <option value="OS">OS</option>
-                                <option value="DSP">DSP</option>
-                                <option value="CIRCUITS">CIRCUITS</option>
-                                <option value="EMT">EMT</option>
-                                <option value="IOT">IOT</option>
+                                <option value="">Loading courses...</option>
                             </select>
                             <input type="number" id="uploadUnit" class="form-control" placeholder="Unit (1-8)" min="1"
                                 max="8" value="1" required />
@@ -1020,6 +1390,26 @@
     <script>
         const BACKEND_URL = "http://127.0.0.1:8000";
 
+        const AUTH_TOKEN_KEY = "kognit_access_token";
+        const USER_KEY = "kognit_user";
+        let accessToken = localStorage.getItem(AUTH_TOKEN_KEY);
+        let currentUser = null;
+
+        const authScreen = document.getElementById("authScreen");
+        const authForm = document.getElementById("authForm");
+        const authSubmit = document.getElementById("authSubmit");
+        const authError = document.getElementById("authError");
+        const loginTab = document.getElementById("loginTab");
+        const registerTab = document.getElementById("registerTab");
+        const nameField = document.getElementById("nameField");
+        const authName = document.getElementById("authName");
+        const authEmail = document.getElementById("authEmail");
+        const authPassword = document.getElementById("authPassword");
+        const app = document.getElementById("app");
+        const userName = document.getElementById("userName");
+        const logoutBtn = document.getElementById("logoutBtn");
+        let authMode = "login";
+
         // Navigation & View Toggling
         const navChatBtn = document.getElementById('navChatBtn');
         const navAdminBtn = document.getElementById('navAdminBtn');
@@ -1051,6 +1441,7 @@
         const input = document.getElementById('input');
         const sendBtn = document.getElementById('sendBtn');
         const courseSelect = document.getElementById('courseSelect');
+        const uploadCourse = document.getElementById('uploadCourse');
         const newChatBtn = document.getElementById('newChatBtn');
         const historyList = document.getElementById('history');
         const panel = document.getElementById('panel');
@@ -1058,21 +1449,625 @@
         const panelBody = document.getElementById('panelBody');
         const panelClose = document.getElementById('panelClose');
         const toggleBtn = document.getElementById('toggleBtn');
-        const app = document.getElementById('app');
 
+        let chatSessions = [];
+        let clientChatHistory = [];
         let sessionId = getOrCreateSessionId();
 
-        let clientChatHistory = [];
+        function sessionStorageKey() {
+            const uid = currentUser?.id || "anon";
+            return `kognit_session_id_${uid}`;
+        }
 
         function getOrCreateSessionId() {
-            let sid = localStorage.getItem("kognit_session_id");
+            let sid = localStorage.getItem(sessionStorageKey()) || localStorage.getItem("kognit_session_id");
             if (!sid) {
-                sid = "kognit_sess_" + Math.random().toString(36).substring(2, 12);
+                sid = (typeof crypto !== "undefined" && crypto.randomUUID)
+                    ? crypto.randomUUID()
+                    : "kognit_sess_" + Math.random().toString(36).substring(2, 12);
+                localStorage.setItem(sessionStorageKey(), sid);
                 localStorage.setItem("kognit_session_id", sid);
             }
             return sid;
         }
 
+        function resetChatView() {
+            threadInner.innerHTML = "";
+            threadInner.style.display = "none";
+            emptyState.style.display = "block";
+            topbarTitle.textContent = "New session";
+            clientChatHistory = [];
+        }
+
+        // ==========================================
+        // AUTHENTICATION HELPERS & API WRAPPER
+        // ==========================================
+        function setAuthError(message, success = false) {
+            authError.textContent = message || "";
+            authError.style.display = message ? "block" : "none";
+
+            if (success) {
+                authError.style.background = "var(--accent-soft)";
+                authError.style.color = "var(--ink-soft)";
+            } else {
+                authError.style.background = "var(--danger-soft)";
+                authError.style.color = "var(--danger)";
+            }
+        }
+
+        function setAuthMode(mode) {
+            authMode = mode;
+            const register = mode === "register";
+
+            loginTab.classList.toggle("active", !register);
+            registerTab.classList.toggle("active", register);
+
+            nameField.style.display = register ? "flex" : "none";
+            authName.required = register;
+            authPassword.autocomplete = register ? "new-password" : "current-password";
+            authSubmit.textContent = register ? "Create account" : "Login";
+
+            setAuthError("");
+        }
+
+        function authHeaders(extraHeaders = {}) {
+            const headers = { ...extraHeaders };
+            if (accessToken) {
+                headers.Authorization = `Bearer ${accessToken}`;
+            }
+            return headers;
+        }
+
+        async function apiFetch(path, options = {}) {
+            const headers = authHeaders(options.headers || {});
+            const response = await fetch(`${BACKEND_URL}${path}`, {
+                ...options,
+                headers
+            });
+
+            if (response.status === 401) {
+                logout(false);
+                throw new Error("Your session has expired. Please log in again.");
+            }
+
+            return response;
+        }
+
+        // ==========================================
+        // COURSE CATALOG LOADER
+        // ==========================================
+        async function loadCourses() {
+            try {
+                const response = await apiFetch("/courses");
+
+                if (!response.ok) {
+                    throw new Error(`Failed to load courses: HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const courses = data.courses || [];
+
+                courseSelect.innerHTML = "";
+                uploadCourse.innerHTML = "";
+
+                if (!courses.length) {
+                    courseSelect.innerHTML = '<option value="">No courses available</option>';
+                    uploadCourse.innerHTML = '<option value="">No courses available</option>';
+                    return;
+                }
+
+                courses.forEach((course) => {
+                    const chatOption = document.createElement("option");
+                    chatOption.value = course.code;
+                    chatOption.textContent = course.code;
+                    courseSelect.appendChild(chatOption);
+
+                    const uploadOption = document.createElement("option");
+                    uploadOption.value = course.code;
+                    uploadOption.textContent = course.code;
+                    uploadCourse.appendChild(uploadOption);
+                });
+
+                if (courses.some((course) => course.code === "DBMS")) {
+                    courseSelect.value = "DBMS";
+                    uploadCourse.value = "DBMS";
+                } else {
+                    courseSelect.value = courses[0].code;
+                    uploadCourse.value = courses[0].code;
+                }
+
+            } catch (error) {
+                console.error("Course loading failed:", error);
+                courseSelect.innerHTML = '<option value="">Failed to load courses</option>';
+                uploadCourse.innerHTML = '<option value="">Failed to load courses</option>';
+            }
+        }
+
+        authForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            setAuthError("");
+            authSubmit.disabled = true;
+            authSubmit.textContent = authMode === "register" ? "Creating..." : "Signing in...";
+
+            try {
+                if (authMode === "register") {
+                    const response = await fetch(`${BACKEND_URL}/auth/register`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            name: authName.value.trim(),
+                            email: authEmail.value.trim(),
+                            password: authPassword.value
+                        })
+                    });
+
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(data.detail || `Registration failed (${response.status})`);
+                    }
+
+                    setAuthMode("login");
+                    authPassword.value = "";
+                    setAuthError("Account created successfully. Please log in.", true);
+                    return;
+                }
+
+                const response = await fetch(`${BACKEND_URL}/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        email: authEmail.value.trim(),
+                        password: authPassword.value
+                    })
+                });
+
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || `Login failed (${response.status})`);
+                }
+
+                accessToken = data.access_token;
+                localStorage.setItem(AUTH_TOKEN_KEY, accessToken);
+
+                const meResponse = await fetch(`${BACKEND_URL}/auth/me`, {
+                    headers: authHeaders()
+                });
+
+                if (!meResponse.ok) {
+                    throw new Error("Login succeeded but user verification failed.");
+                }
+
+                currentUser = await meResponse.json();
+                localStorage.setItem(USER_KEY, JSON.stringify(currentUser));
+
+                enterApplication();
+                await loadCourses();
+                await initializeChatForUser();
+                await loadDocumentInventory();
+            } catch (error) {
+                console.error("Authentication error:", error);
+                setAuthError(error.message || "Authentication failed.");
+            } finally {
+                authSubmit.disabled = false;
+                authSubmit.textContent = authMode === "register" ? "Create account" : "Login";
+            }
+        });
+
+        function enterApplication() {
+            authScreen.style.display = "none";
+            app.classList.remove("locked");
+
+            if (userName) {
+                userName.textContent = currentUser?.name || currentUser?.email || "User";
+            }
+        }
+
+        function showAuthentication() {
+            authScreen.style.display = "flex";
+            app.classList.add("locked");
+        }
+
+        function logout(redirect = true) {
+            accessToken = null;
+            currentUser = null;
+            localStorage.removeItem(AUTH_TOKEN_KEY);
+            localStorage.removeItem(USER_KEY);
+            clientChatHistory = [];
+
+            showAuthentication();
+            setAuthMode("login");
+            authEmail.value = "";
+            authPassword.value = "";
+        }
+
+        loginTab.addEventListener("click", () => setAuthMode("login"));
+        registerTab.addEventListener("click", () => setAuthMode("register"));
+        logoutBtn.addEventListener("click", () => logout(true));
+
+        async function initializeChatForUser() {
+            sessionId = getOrCreateSessionId();
+            await loadChatSessions(sessionId);
+        }
+
+        async function initializeAuthentication() {
+            if (!accessToken) {
+                showAuthentication();
+                return;
+            }
+
+            try {
+                const response = await apiFetch("/auth/me");
+                if (!response.ok) {
+                    throw new Error("Authentication expired");
+                }
+
+                const user = await response.json();
+                currentUser = user;
+                localStorage.setItem(USER_KEY, JSON.stringify(user));
+
+                enterApplication();
+                await loadCourses();
+                await initializeChatForUser();
+                await loadDocumentInventory();
+            } catch (error) {
+                console.warn("Existing authentication invalid:", error);
+                logout(false);
+            }
+        }
+
+        // ==========================================
+        // SESSION MANAGEMENT (POSTGRESQL-BACKED)
+        // ==========================================
+        function addHistoryItem(title, sid = sessionId) {
+            document
+                .querySelectorAll('.history-item')
+                .forEach(el => el.classList.remove('active'));
+
+            // Prevent duplicate entry for the same session.
+            const existing = historyList.querySelector(
+                `.history-item[data-session-id="${CSS.escape(sid)}"]`
+            );
+
+            if (existing) {
+                existing.classList.add('active');
+
+                const titleEl = existing.querySelector('.history-item-title');
+
+                if (titleEl) {
+                    titleEl.textContent = title;
+                }
+
+                return existing;
+            }
+
+            const item = document.createElement('div');
+
+            item.className = 'history-item active';
+            item.dataset.sessionId = sid;
+
+            const titleEl = document.createElement('div');
+
+            titleEl.className = 'history-item-title';
+            titleEl.textContent = title;
+            titleEl.title = title;
+
+            const deleteBtn = document.createElement('button');
+
+            deleteBtn.type = 'button';
+            deleteBtn.className = 'history-delete';
+            deleteBtn.title = 'Delete session';
+            deleteBtn.setAttribute('aria-label', `Delete session: ${title}`);
+
+            deleteBtn.innerHTML = `
+                <svg
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    aria-hidden="true"
+                >
+                    <path
+                        d="M3 4.5H13"
+                        stroke="currentColor"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                    />
+                    <path
+                        d="M6 4.5V3H10V4.5"
+                        stroke="currentColor"
+                        stroke-width="1.3"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    />
+                    <path
+                        d="M4.5 4.5L5 13H11L11.5 4.5"
+                        stroke="currentColor"
+                        stroke-width="1.3"
+                        stroke-linejoin="round"
+                    />
+                </svg>
+            `;
+
+            deleteBtn.addEventListener('click', async (event) => {
+                event.stopPropagation();
+
+                await deleteChatSession(sid, item);
+            });
+
+            item.addEventListener('click', () => {
+                if (sid === sessionId) {
+                    return;
+                }
+
+                selectChatSession(sid);
+            });
+
+            item.appendChild(titleEl);
+            item.appendChild(deleteBtn);
+
+            historyList.appendChild(item);
+
+            return item;
+        }
+
+        async function deleteChatSession(sid, itemElement) {
+            const titleElement = itemElement.querySelector('.history-item-title');
+            const title = titleElement?.textContent || 'this session';
+
+            const confirmed = confirm(
+                `Delete "${title}"?\n\nThis will remove the session from KOGNIT.`
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            try {
+                const response = await apiFetch(
+                    `/chat/session/${encodeURIComponent(sid)}`,
+                    {
+                        method: "DELETE"
+                    }
+                );
+
+                if (!response.ok) {
+                    let message = `HTTP ${response.status}`;
+
+                    try {
+                        const data = await response.json();
+                        if (data.detail) {
+                            message = data.detail;
+                        }
+                    } catch (_) {
+                        // Keep HTTP status message.
+                    }
+
+                    throw new Error(message);
+                }
+
+                itemElement.remove();
+
+                if (sid === sessionId) {
+                    createNewLocalSession();
+                }
+
+            } catch (error) {
+                console.error("Failed to delete chat session:", error);
+                alert(`Could not delete the session.\n\n${error.message}`);
+            }
+        }
+
+        function createNewLocalSession() {
+            sessionId =
+                "kognit_sess_" +
+                Math.random()
+                    .toString(36)
+                    .substring(2, 12);
+
+            localStorage.setItem("kognit_session_id", sessionId);
+            localStorage.setItem(sessionStorageKey(), sessionId);
+
+            threadInner.innerHTML = "";
+            threadInner.style.display = "none";
+            emptyState.style.display = "block";
+            topbarTitle.textContent = "New session";
+            clientChatHistory = [];
+
+            document
+                .querySelectorAll(".history-item")
+                .forEach(el => {
+                    el.classList.remove("active");
+                });
+        }
+
+        function selectChatSession(sid) {
+            loadChatSession(sid);
+        }
+
+        function renderSessionList(sessions) {
+            chatSessions = Array.isArray(sessions) ? sessions : [];
+
+            historyList
+                .querySelectorAll(".history-item")
+                .forEach(el => el.remove());
+
+            chatSessions.forEach(session => {
+                const item = addHistoryItem(session.title || "New session", session.session_id);
+                item.classList.toggle("active", session.session_id === sessionId);
+            });
+        }
+
+        async function loadChatSessions(preferredSessionId = null) {
+            try {
+                const response = await apiFetch("/chat/sessions");
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                const sessions = data.sessions || [];
+
+                renderSessionList(sessions);
+
+                const storedSession = preferredSessionId || localStorage.getItem(sessionStorageKey()) || localStorage.getItem("kognit_session_id");
+                const target = sessions.find(session => session.session_id === storedSession) || sessions[0];
+
+                if (target) {
+                    await loadChatSession(target.session_id);
+                } else {
+                    sessionId = storedSession || getOrCreateSessionId();
+                    localStorage.setItem(sessionStorageKey(), sessionId);
+                    localStorage.setItem("kognit_session_id", sessionId);
+                    resetChatView();
+                }
+            } catch (error) {
+                console.error("Could not load persisted chat sessions:", error);
+                sessionId = getOrCreateSessionId();
+                resetChatView();
+            }
+        }
+
+        async function loadChatSession(targetSessionId, refreshList = false) {
+            if (!targetSessionId) return;
+
+            try {
+                const response = await apiFetch(`/chat/session/${encodeURIComponent(targetSessionId)}`);
+
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        await loadChatSessions();
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                sessionId = data.session_id;
+                localStorage.setItem(sessionStorageKey(), sessionId);
+                localStorage.setItem("kognit_session_id", sessionId);
+
+                if (data.course_code) {
+                    const option = Array.from(courseSelect.options).find(opt => opt.value === data.course_code);
+                    if (option) {
+                        courseSelect.value = data.course_code;
+                    }
+                }
+
+                threadInner.innerHTML = "";
+                emptyState.style.display = "none";
+                threadInner.style.display = "flex";
+                topbarTitle.textContent = data.title || "New session";
+
+                const messages = Array.isArray(data.messages) ? data.messages : [];
+                messages.forEach(renderPersistedMessage);
+
+                clientChatHistory = messages
+                    .filter(message => message.role === "user" || message.role === "assistant")
+                    .slice(-4)
+                    .map(message => ({
+                        role: message.role,
+                        content: message.content
+                    }));
+
+                historyList
+                    .querySelectorAll(".history-item")
+                    .forEach(item => {
+                        item.classList.toggle(
+                            "active",
+                            item.dataset.sessionId === sessionId
+                        );
+                    });
+
+                requestAnimationFrame(() => {
+                    thread.scrollTop = thread.scrollHeight;
+                });
+
+                if (refreshList) {
+                    await loadChatSessions(sessionId);
+                }
+            } catch (error) {
+                console.error("Failed to load chat session:", error);
+            }
+        }
+
+        function renderPersistedMessage(message) {
+            if (message.role === "user") {
+                const row = document.createElement("div");
+                row.className = "msg user";
+                row.innerHTML = `<div class="bubble">${escapeHtml(message.content || "")}</div>`;
+                threadInner.appendChild(row);
+                return;
+            }
+
+            if (message.role !== "assistant") return;
+
+            const row = document.createElement("div");
+            row.className = "msg assistant";
+            row.innerHTML = `
+                <div class="avatar">K</div>
+                <div class="bubble">
+                    <div class="routing-badge"></div>
+                    <div class="answer"></div>
+                    <div class="sources"></div>
+                </div>
+            `;
+
+            const metadata = message.metadata || {};
+            const badge = row.querySelector(".routing-badge");
+
+            if (metadata.crag_decision || metadata.response_type) {
+                const label = metadata.crag_decision || metadata.response_type;
+                badge.innerHTML = `<span class="meta-tag">${escapeHtml(label)}</span>`;
+            }
+
+            renderMarkdownWithMath(
+                row.querySelector(".answer"),
+                message.content || ""
+            );
+
+            renderCitationChips(
+                row.querySelector(".sources"),
+                metadata.citations || []
+            );
+
+            threadInner.appendChild(row);
+        }
+
+        // Markdown & Math Rendering Pipeline
+        function renderMarkdownWithMath(element, markdownText) {
+            if (!element) return;
+            const text = String(markdownText || "");
+
+            if (typeof marked === "undefined") {
+                element.textContent = text;
+                return;
+            }
+
+            marked.setOptions({
+                gfm: true,
+                breaks: false
+            });
+
+            element.innerHTML = marked.parse(text);
+
+            if (typeof renderMathInElement !== "function") {
+                return;
+            }
+
+            renderMathInElement(element, {
+                delimiters: [
+                    { left: "$$", right: "$$", display: true },
+                    { left: "\\[", right: "\\]", display: true },
+                    { left: "$", right: "$", display: false },
+                    { left: "\\(", right: "\\)", display: false }
+                ],
+                throwOnError: false,
+                strict: false
+            });
+        }
+
+        // ==========================================
+        // CHAT COMPOSER & STREAMING
+        // ==========================================
         input.addEventListener('input', () => {
             input.style.height = 'auto';
             input.style.height = Math.min(input.scrollHeight, 160) + 'px';
@@ -1108,9 +2103,18 @@
             if (emptyState.style.display !== 'none') {
                 emptyState.style.display = 'none';
                 threadInner.style.display = 'flex';
-                topbarTitle.textContent = text.length > 35 ? text.slice(0, 35) + '…' : text;
-                addHistoryItem(topbarTitle.textContent);
+
+                topbarTitle.textContent =
+                    text.length > 35
+                        ? text.slice(0, 35) + '…'
+                        : text;
+
+                addHistoryItem(
+                    topbarTitle.textContent,
+                    sessionId
+                );
             }
+
             const row = document.createElement('div');
             row.className = 'msg user';
             row.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
@@ -1122,13 +2126,13 @@
             const row = document.createElement('div');
             row.className = 'msg assistant';
             row.innerHTML = `
-      <div class="avatar">K</div>
-      <div class="bubble">
-        <div class="routing-badge"></div>
-        <div class="answer"><div class="typing"><span></span><span></span><span></span></div></div>
-        <div class="sources"></div>
-      </div>
-    `;
+                <div class="avatar">K</div>
+                <div class="bubble">
+                    <div class="routing-badge"></div>
+                    <div class="answer"><div class="typing"><span></span><span></span><span></span></div></div>
+                    <div class="sources"></div>
+                </div>
+            `;
             threadInner.appendChild(row);
             thread.scrollTop = thread.scrollHeight;
             return {
@@ -1136,36 +2140,6 @@
                 sourcesEl: row.querySelector('.sources'),
                 badgeEl: row.querySelector('.routing-badge')
             };
-        }
-
-        function addHistoryItem(title) {
-            document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
-            const item = document.createElement('div');
-            item.className = 'history-item active';
-            item.textContent = title;
-            historyList.appendChild(item);
-        }
-
-        // Render Markdown first, then render LaTeX with KaTeX.
-        function renderMarkdownWithMath(element, markdownText) {
-            if (!element) return;
-            element.innerHTML = marked.parse(markdownText);
-
-            if (typeof renderMathInElement !== "function") {
-                setTimeout(() => renderMarkdownWithMath(element, markdownText), 50);
-                return;
-            }
-
-            renderMathInElement(element, {
-                delimiters: [
-                    { left: "$$", right: "$$", display: true },
-                    { left: "\\[", right: "\\]", display: true },
-                    { left: "$", right: "$", display: false },
-                    { left: "\\(", right: "\\)", display: false }
-                ],
-                throwOnError: false,
-                strict: false
-            });
         }
 
         async function sendMessage(question) {
@@ -1183,37 +2157,56 @@
             let accumulatedText = "";
 
             try {
-                const response = await fetch(`${BACKEND_URL}/chat/stream`, {
+                const response = await apiFetch("/chat/stream", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
                 });
 
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                if (!response.body) throw new Error("Streaming response body is unavailable");
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                if (!response.body) {
+                    throw new Error("Streaming response body is unavailable");
+                }
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder("utf-8");
                 let buffer = "";
 
-                const processSSEBlock = (block) => {
+                function processSSEBlock(block) {
                     const trimmed = block.trim();
-                    if (!trimmed || !trimmed.startsWith("data: ")) return;
+                    if (!trimmed || !trimmed.startsWith("data:")) return;
 
-                    const data = JSON.parse(trimmed.replace(/^data:\s*/, ""));
+                    try {
+                        const jsonText = trimmed.replace(/^data:\s*/, "");
+                        const data = JSON.parse(jsonText);
 
-                    if (data.type === "metadata") {
-                        if (data.crag_decision) {
-                            const queryLabel = data.standalone_query || "";
-                            badgeEl.innerHTML = `<span class="meta-tag">${escapeHtml(data.crag_decision)}${queryLabel ? " • " + escapeHtml(queryLabel) : ""}</span>`;
+                        if (data.type === "metadata") {
+                            if (data.crag_decision) {
+                                const queryLabel = data.standalone_query || "";
+                                badgeEl.innerHTML = `
+                                    <span class="meta-tag">
+                                        ${escapeHtml(data.crag_decision)}
+                                        ${queryLabel ? " • " + escapeHtml(queryLabel) : ""}
+                                    </span>
+                                `;
+                            }
+                            renderCitationChips(sourcesEl, data.citations || []);
+                            return;
                         }
-                        renderCitationChips(sourcesEl, data.citations || []);
-                    } else if (data.type === "token") {
-                        accumulatedText += data.content || "";
-                        renderMarkdownWithMath(answerEl, accumulatedText);
-                        thread.scrollTop = thread.scrollHeight;
+
+                        if (data.type === "token") {
+                            const token = data.content || "";
+                            accumulatedText += token;
+                            answerEl.textContent = accumulatedText;
+                            thread.scrollTop = thread.scrollHeight;
+                        }
+                    } catch (error) {
+                        console.warn("Invalid SSE event:", error);
                     }
-                };
+                }
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -1222,21 +2215,38 @@
                     buffer += decoder.decode(value, { stream: true });
                     const blocks = buffer.split("\n\n");
                     buffer = blocks.pop() || "";
-                    for (const block of blocks) processSSEBlock(block);
+
+                    for (const block of blocks) {
+                        processSSEBlock(block);
+                    }
                 }
 
-                if (buffer.trim()) processSSEBlock(buffer);
+                if (buffer.trim()) {
+                    processSSEBlock(buffer);
+                }
 
                 if (accumulatedText.trim()) {
+                    renderMarkdownWithMath(answerEl, accumulatedText);
+
                     clientChatHistory.push({ role: "user", content: question });
                     clientChatHistory.push({ role: "assistant", content: accumulatedText });
                     clientChatHistory = clientChatHistory.slice(-4);
+
+                    await loadChatSessions(sessionId);
                 }
-            } catch (err) {
-                answerEl.innerHTML = `<span style="color: #A64444;">Connection error: ${escapeHtml(err.message)}</span>`;
+            } catch (error) {
+                console.error("Chat request failed:", error);
+                answerEl.innerHTML = `
+                    <span style="color: #A64444;">
+                        Connection error: ${escapeHtml(error.message)}
+                    </span>
+                `;
             }
         }
 
+        // ==========================================
+        // DRAWER PANEL & CITATIONS
+        // ==========================================
         function resolveCitationUrl(url) {
             if (!url) return "";
             if (/^https?:\/\//i.test(url)) return url;
@@ -1245,10 +2255,7 @@
 
         function renderCitationChips(container, citations) {
             container.innerHTML = "";
-
-            if (!Array.isArray(citations) || citations.length === 0) {
-                return;
-            }
+            if (!Array.isArray(citations) || citations.length === 0) return;
 
             citations.forEach((cite, idx) => {
                 const chip = document.createElement("div");
@@ -1276,7 +2283,6 @@
             const resolvedUrl = resolveCitationUrl(citation.url || "");
 
             let externalLink = "";
-
             if (resolvedUrl) {
                 const linkText = isWeb
                     ? "Open external source ↗"
@@ -1317,23 +2323,42 @@
 
         newChatBtn.addEventListener('click', async () => {
             try {
-                await fetch(`${BACKEND_URL}/chat/session/${sessionId}`, { method: "DELETE" });
-            } catch (e) {
-                console.warn("Backend session clear failed:", e);
-            }
-            sessionId = "kognit_sess_" + Math.random().toString(36).substring(2, 12);
-            localStorage.setItem("kognit_session_id", sessionId);
+                if (sessionId) {
+                    const response = await apiFetch(
+                        `/chat/session/${encodeURIComponent(sessionId)}`,
+                        {
+                            method: "DELETE"
+                        }
+                    );
 
-            threadInner.innerHTML = '';
-            threadInner.style.display = 'none';
-            emptyState.style.display = 'block';
-            topbarTitle.textContent = 'New session';
-            clientChatHistory = [];
-            document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+                    if (!response.ok) {
+                        console.warn(
+                            "Backend session clear failed:",
+                            response.status
+                        );
+                    }
+                }
+            } catch (error) {
+                console.warn(
+                    "Backend session clear failed:",
+                    error
+                );
+            }
+
+            const currentItem =
+                historyList.querySelector(
+                    `.history-item[data-session-id="${CSS.escape(sessionId)}"]`
+                );
+
+            if (currentItem) {
+                currentItem.remove();
+            }
+
+            createNewLocalSession();
         });
 
         // ==========================================
-        // ADMIN DASHBOARD LOGIC
+        // ADMIN DASHBOARD & INVENTORY
         // ==========================================
         const docTableBody = document.getElementById('documentTableBody');
         const totalDocsCount = document.getElementById('totalDocsCount');
@@ -1345,47 +2370,90 @@
 
         async function loadDocumentInventory() {
             try {
-                const res = await fetch(`${BACKEND_URL}/documents`);
-                if (!res.ok) throw new Error("Failed to query indexed documents");
+                const res = await apiFetch("/documents");
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
 
                 const data = await res.json();
                 const docs = data.documents || [];
 
-                // Update metrics
                 totalDocsCount.textContent = docs.length;
-                const totalChunks = docs.reduce((acc, d) => acc + (d.chunk_count || 0), 0);
-                totalChunksCount.textContent = totalChunks;
-                const uniqueCourses = new Set(docs.map(d => d.course_code));
-                activeCoursesCount.textContent = uniqueCourses.size;
+                totalChunksCount.textContent = docs.reduce(
+                    (total, doc) => total + Number(doc.chunk_count ?? doc.chunks ?? 0),
+                    0
+                );
+
+                const courses = new Set(
+                    docs.map(doc => doc.course_code).filter(Boolean)
+                );
+                activeCoursesCount.textContent = courses.size;
+
+                docTableBody.innerHTML = "";
 
                 if (docs.length === 0) {
-                    docTableBody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--ink-soft);">No documents indexed yet. Upload a PDF above.</td></tr>`;
+                    docTableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" style="text-align:center; color:var(--ink-soft);">
+                                No documents indexed yet. Upload a PDF above.
+                            </td>
+                        </tr>
+                    `;
                     return;
                 }
 
-                docTableBody.innerHTML = "";
                 docs.forEach(doc => {
-                    const tr = document.createElement('tr');
+                    const tr = document.createElement("tr");
                     tr.innerHTML = `
-          <td><strong>${escapeHtml(doc.source)}</strong></td>
-          <td><span class="badge">${escapeHtml(doc.course_code)}</span></td>
-          <td>Unit ${doc.unit}</td>
-          <td>${doc.chunk_count} chunks</td>
-          <td style="text-align: right;">
-            <button class="action-del" data-source="${escapeHtml(doc.source)}" data-course="${escapeHtml(doc.course_code)}">
-              Delete
-            </button>
-          </td>
-        `;
-                    tr.querySelector('.action-del').addEventListener('click', (e) => {
+                        <td>
+                            <strong>
+                                ${escapeHtml(
+                        doc.original_filename ||
+                        doc.source ||
+                        "Unknown document"
+                    )}
+                            </strong>
+                        </td>
+                        <td>
+                            <span class="meta-tag">
+                                ${escapeHtml(doc.course_code || "-")}
+                            </span>
+                        </td>
+                        <td>
+                            ${escapeHtml(doc.unit ? `Unit ${doc.unit}` : "-")}
+                        </td>
+                        <td>
+                            ${escapeHtml(String(doc.chunk_count ?? doc.chunks ?? 0))} chunks
+                        </td>
+                        <td style="text-align: right;">
+                            <button
+                                type="button"
+                                class="action-del"
+                                data-source="${escapeHtml(doc.source || doc.original_filename || "")}"
+                                data-course="${escapeHtml(doc.course_code || "")}"
+                            >
+                                Delete
+                            </button>
+                        </td>
+                    `;
+
+                    tr.querySelector(".action-del").addEventListener("click", (e) => {
                         const s = e.target.dataset.source;
                         const c = e.target.dataset.course;
                         deleteDocument(s, c);
                     });
+
                     docTableBody.appendChild(tr);
                 });
             } catch (err) {
-                docTableBody.innerHTML = `<tr><td colspan="5" style="color: var(--danger); text-align: center;">Error loading inventory: ${escapeHtml(err.message)}</td></tr>`;
+                console.error("Failed to load documents:", err);
+                docTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="color:var(--danger); text-align:center;">
+                            Error loading inventory: ${escapeHtml(err.message)}
+                        </td>
+                    </tr>
+                `;
             }
         }
 
@@ -1394,9 +2462,10 @@
                 return;
             }
             try {
-                const res = await fetch(`${BACKEND_URL}/documents?source=${encodeURIComponent(source)}&course_code=${encodeURIComponent(courseCode)}`, {
-                    method: "DELETE"
-                });
+                const res = await apiFetch(
+                    `/documents?source=${encodeURIComponent(source)}&course_code=${encodeURIComponent(courseCode)}`,
+                    { method: "DELETE" }
+                );
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 await loadDocumentInventory();
             } catch (err) {
@@ -1425,13 +2494,13 @@
             uploadStatus.textContent = `Extracting, embedding, and indexing ${fileInput.files[0].name}...`;
 
             try {
-                const res = await fetch(`${BACKEND_URL}/documents/upload`, {
+                const res = await apiFetch("/documents/upload", {
                     method: "POST",
                     body: formData
                 });
 
                 if (!res.ok) {
-                    const errorData = await res.json();
+                    const errorData = await res.json().catch(() => ({}));
                     throw new Error(errorData.detail || `Server returned ${res.status}`);
                 }
 
@@ -1462,6 +2531,9 @@
         function escapeAttribute(value) {
             return escapeHtml(value);
         }
+
+        // Bootstrap on DOM load
+        initializeAuthentication();
     </script>
 </body>
 

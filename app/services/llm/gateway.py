@@ -506,7 +506,9 @@ or system details.
         retrieved_chunks: List[Dict[str, Any]],
         history: List[Dict[str, str]],
         crag_decision: str = "UNKNOWN",
-        long_term_memories: Optional[List[Dict[str, Any]]] = None,
+        long_term_memories: Optional[
+            List[Dict[str, Any]]
+        ] = None,
     ) -> Iterator[str]:
 
         decision = crag_decision.upper()
@@ -514,9 +516,9 @@ or system details.
         if decision == "OUT_OF_SCOPE":
 
             yield (
-                "This question is outside the scope of the selected "
-                "course. Please select the appropriate course to ask "
-                "this question."
+                "This question is outside the scope "
+                "of the selected course. Please select "
+                "the appropriate course to ask this question."
             )
 
             return
@@ -524,10 +526,11 @@ or system details.
         if decision == "OFF_TOPIC":
 
             yield (
-                "That's outside what I can help with here — I'm built "
-                "to assist with technical and academic questions for "
-                "your engineering courses. Feel free to ask me "
-                "something related to your coursework instead."
+                "That's outside what I can help with here — "
+                "I'm built to assist with technical and academic "
+                "questions for your engineering courses. "
+                "Feel free to ask me something related to "
+                "your coursework instead."
             )
 
             return
@@ -568,12 +571,19 @@ or system details.
 
                 received_content = True
 
-                cleaned = self._clean_model_output(
-                    content
-                )
-
-                if cleaned:
-                    yield cleaned
+                # DO NOT call .strip() here.
+                #
+                # Streaming tokens may contain leading spaces.
+                # Removing them joins words together:
+                #
+                # "Database" + " Management"
+                #
+                # becomes:
+                #
+                # "DatabaseManagement"
+                #
+                # We preserve the exact token content.
+                yield content
 
             if not received_content:
                 yield (
@@ -581,6 +591,7 @@ or system details.
                 )
 
         except Exception:
+
             logger.exception(
                 "LLM streaming failed"
             )

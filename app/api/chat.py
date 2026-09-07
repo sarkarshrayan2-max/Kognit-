@@ -2,8 +2,9 @@ import json
 import logging
 from typing import Any, AsyncIterator, Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -12,6 +13,7 @@ from app.graph.workflow import (
     kognit_graph,
     llm_gateway,
 )
+from app.models.chat import Conversation
 from app.models.user import User
 from app.schemas.chat import ChatRequest
 from app.services.chat.persistence import chat_persistence
@@ -455,6 +457,147 @@ async def chat_stream_endpoint(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.get("/sessions")
+def list_chat_sessions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return all persisted conversations belonging to the
+    currently authenticated user.
+
+    PostgreSQL is the source of truth for durable chat history.
+    """
+
+    conversations = db.scalars(
+        select(Conversation)
+        .where(
+            Conversation.user_id == current_user.id
+        )
+        .order_by(
+            Conversation.updated_at.desc()
+        )
+    ).all()
+
+    sessions = []
+
+    for conversation in conversations:
+        messages = chat_persistence.get_messages(
+            db=db,
+            conversation_id=conversation.id,
+            limit=100,
+        )
+
+        first_user_message = next(
+            (
+                message
+                for message in messages
+                if message.role == "user"
+            ),
+            None,
+        )
+
+        title = (
+            conversation.title
+            or (
+                first_user_message.content
+                if first_user_message
+                else None
+            )
+            or "New session"
+        )
+
+        sessions.append(
+            {
+                "session_id": conversation.session_id,
+                "title": title[:255],
+                "course_code": (
+                    conversation.course.code
+                    if conversation.course
+                    else None
+                ),
+                "message_count": len(messages),
+                "created_at": (
+                    conversation.created_at.isoformat()
+                    if conversation.created_at
+                    else None
+                ),
+                "updated_at": (
+                    conversation.updated_at.isoformat()
+                    if conversation.updated_at
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "sessions": sessions,
+        "count": len(sessions),
+    }
+
+
+@router.get("/session/{session_id}")
+def get_chat_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Return one complete persisted conversation.
+
+    Access is scoped to the authenticated user.
+    """
+
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.user_id == current_user.id,
+            Conversation.session_id == session_id,
+        )
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    messages = chat_persistence.get_messages(
+        db=db,
+        conversation_id=conversation.id,
+        limit=100,
+    )
+
+    return {
+        "session_id": conversation.session_id,
+        "title": (
+            conversation.title
+            or "New session"
+        ),
+        "course_code": (
+            conversation.course.code
+            if conversation.course
+            else None
+        ),
+        "messages": [
+            {
+                "id": message.id,
+                "role": message.role,
+                "content": message.content,
+                "metadata": (
+                    message.message_metadata
+                    or {}
+                ),
+                "created_at": (
+                    message.created_at.isoformat()
+                    if message.created_at
+                    else None
+                ),
+            }
+            for message in messages
+        ],
+    }
 
 
 @router.delete("/session/{session_id}")

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.chat import Conversation, Message
@@ -39,7 +39,11 @@ class ChatPersistence:
         conversation = Conversation(
             session_id=session_id,
             user_id=user_id,
-            course_id=course.id if course else None,
+            course_id=(
+                course.id
+                if course
+                else None
+            ),
         )
 
         db.add(conversation)
@@ -65,6 +69,15 @@ class ChatPersistence:
         )
 
         db.add(message)
+
+        conversation = db.get(
+            Conversation,
+            conversation_id,
+        )
+
+        if conversation is not None:
+            conversation.updated_at = func.now()
+
         db.commit()
         db.refresh(message)
 
@@ -80,9 +93,12 @@ class ChatPersistence:
         statement = (
             select(Message)
             .where(
-                Message.conversation_id == conversation_id
+                Message.conversation_id
+                == conversation_id
             )
-            .order_by(Message.created_at.desc())
+            .order_by(
+                Message.created_at.desc()
+            )
             .limit(limit)
         )
 

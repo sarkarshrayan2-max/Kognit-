@@ -8,7 +8,7 @@ from app.api.auth import router as auth_router
 from app.api.chat import router as chat_router
 from app.api.documents import router as doc_router
 from app.graph.workflow import retriever
-
+from app.api.courses import router as courses_router
 
 logger = logging.getLogger("kognit.gateway")
 
@@ -71,7 +71,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(doc_router)
-
+app.include_router(courses_router)
 
 @app.get(
     "/health",
