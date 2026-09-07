@@ -14,8 +14,8 @@ async def run_conversation_test():
     session_history = []
 
     queries = [
-        "What is a food additive?",
-        "What are its main purposes?",
+        "What is a Null values?",
+        "What are its example?",
         "Which authority regulates it in India?",
         "What does that authority do?",
     ]
@@ -29,7 +29,7 @@ async def run_conversation_test():
 
         initial_state = {
             "query": query,
-            "course_code": "COA",
+            "course_code": "DBMS",
             "history": session_history,
             "top_k": 3,
         }

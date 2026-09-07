@@ -26,30 +26,17 @@ class GraphState(TypedDict, total=False):
     course_code: str
     history: List[Dict[str, str]]
     top_k: int
-
-    # Query understanding
+    user_id: str
+    session_id: str
     intent: str
     standalone_query: str
-
-    # Response
-    response_type: str
-    answer: Optional[str]
-
-    # Retrieval
+    long_term_memories: List[Dict[str, Any]]
     local_chunks: List[Dict[str, Any]]
     final_context: List[Dict[str, Any]]
-
-    # CRAG
     crag_decision: str
     citations: List[Dict[str, Any]]
-
-    # User context
-    user_id: str
-
-    # PostgreSQL long-term memory
-    long_term_memories: List[Dict[str, Any]]
-
-    # Redis short-term graph state
+    response_type: str
+    answer: Optional[str]
     previous_state: Dict[str, Any]
 
 
@@ -107,15 +94,6 @@ def conversational_node(
 def off_topic_node(
     state: GraphState,
 ) -> Dict[str, Any]:
-    """Handles messages that are substantive (not filler/greetings) but
-    concern a subject with no technical/academic content at all — e.g.
-    "tell me about Oliver Twist". This is distinct from OUT_OF_SCOPE,
-    which is for technical-sounding questions that don't belong to the
-    selected course. Both short-circuit before retrieval, but the copy
-    differs since there's no "selected course" framing that makes sense
-    here.
-    """
-
     answer = (
         "That's outside what I can help with here — I'm built to "
         "assist with technical and academic questions for your "
@@ -177,13 +155,6 @@ def memory_retrieval_node(
     state: GraphState,
     config: RunnableConfig,
 ) -> Dict[str, Any]:
-    """
-    Retrieve durable user memories from PostgreSQL.
-
-    PostgreSQL = long-term memory.
-    Redis is NOT used here.
-    """
-
     configurable = config.get(
         "configurable",
         {},
@@ -490,6 +461,39 @@ def generation_node(
     }
 
 
+def finalize_node(
+    state: GraphState,
+) -> Dict[str, Any]:
+    answer = state.get("answer")
+
+    logger.info(
+        "Finalizing response | type=%s | crag=%s | citations=%d",
+        state.get("response_type"),
+        state.get("crag_decision"),
+        len(state.get("citations", [])),
+    )
+
+    return {
+        "answer": answer,
+        "response_type": state.get(
+            "response_type",
+            "UNKNOWN",
+        ),
+        "crag_decision": state.get(
+            "crag_decision",
+            "UNKNOWN",
+        ),
+        "final_context": state.get(
+            "final_context",
+            [],
+        ),
+        "citations": state.get(
+            "citations",
+            [],
+        ),
+    }
+
+
 def route_by_intent(
     state: GraphState,
 ) -> str:
@@ -546,6 +550,11 @@ workflow.add_node(
     generation_node,
 )
 
+workflow.add_node(
+    "finalize",
+    finalize_node,
+)
+
 workflow.add_edge(
     START,
     "condenser",
@@ -578,16 +587,21 @@ workflow.add_edge(
 
 workflow.add_edge(
     "generator",
-    END,
+    "finalize",
 )
 
 workflow.add_edge(
     "conversational_handler",
-    END,
+    "finalize",
 )
 
 workflow.add_edge(
     "off_topic_handler",
+    "finalize",
+)
+
+workflow.add_edge(
+    "finalize",
     END,
 )
 

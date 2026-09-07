@@ -119,6 +119,7 @@ async def chat_stream_endpoint(
         "history": history,
         "top_k": payload.top_k or 3,
         "user_id": str(current_user.id),
+        "session_id": session_id,
         "previous_state": previous_state,
     }
 
@@ -286,6 +287,48 @@ async def chat_stream_endpoint(
                                     "content": final_answer,
                                 }
                             )
+
+                        continue
+
+                    if node_name == "finalize":
+                        response_type = node_update.get(
+                            "response_type",
+                            response_type,
+                        )
+
+                        decision = node_update.get(
+                            "crag_decision",
+                            decision,
+                        )
+
+                        citations = node_update.get(
+                            "citations",
+                            citations,
+                        )
+
+                        final_answer = node_update.get(
+                            "answer",
+                            "",
+                        )
+
+                        if final_answer and not accumulated_answer:
+                            accumulated_answer = final_answer
+
+                        if not metadata_sent:
+                            metadata_sent = True
+
+                            yield sse_event(
+                                {
+                                    "type": "metadata",
+                                    "crag_decision": decision,
+                                    "citations": citations,
+                                    "model_used": llm_gateway.model_name,
+                                    "standalone_query": standalone_query,
+                                    "response_type": response_type,
+                                }
+                            )
+
+                        continue
 
             if accumulated_answer:
                 chat_persistence.save_message(
