@@ -1781,6 +1781,7 @@
                         d="M4.5 4.5L5 13H11L11.5 4.5"
                         stroke="currentColor"
                         stroke-width="1.3"
+                        stroke-linecap="round"
                         stroke-linejoin="round"
                     />
                 </svg>
@@ -2321,39 +2322,7 @@
         panelOverlay.addEventListener('click', closePanel);
         toggleBtn.addEventListener('click', () => app.classList.toggle('sidebar-collapsed'));
 
-        newChatBtn.addEventListener('click', async () => {
-            try {
-                if (sessionId) {
-                    const response = await apiFetch(
-                        `/chat/session/${encodeURIComponent(sessionId)}`,
-                        {
-                            method: "DELETE"
-                        }
-                    );
-
-                    if (!response.ok) {
-                        console.warn(
-                            "Backend session clear failed:",
-                            response.status
-                        );
-                    }
-                }
-            } catch (error) {
-                console.warn(
-                    "Backend session clear failed:",
-                    error
-                );
-            }
-
-            const currentItem =
-                historyList.querySelector(
-                    `.history-item[data-session-id="${CSS.escape(sessionId)}"]`
-                );
-
-            if (currentItem) {
-                currentItem.remove();
-            }
-
+        newChatBtn.addEventListener('click', () => {
             createNewLocalSession();
         });
 

@@ -603,8 +603,31 @@ def get_chat_session(
 @router.delete("/session/{session_id}")
 def clear_session_endpoint(
     session_id: str,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Permanently delete a persisted conversation belonging to the
+    currently authenticated user, then clear its Redis session state.
+    """
+
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.user_id == current_user.id,
+            Conversation.session_id == session_id,
+        )
+    )
+
+    if conversation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Conversation not found.",
+        )
+
+    db.delete(conversation)
+    db.commit()
+
+
     session_manager.clear_session(
         current_user.id,
         session_id,
