@@ -565,4 +565,4 @@ class DocumentIndexer:
         }
 
 
-indexer = DocumentIndexer()
+indexer = None 

@@ -43,9 +43,6 @@ class HybridRetriever:
             device=device,
         )
 
-    # ---------------------------------------------------------
-    # Create a stable identity for a document chunk
-    # ---------------------------------------------------------
     @staticmethod
     def _chunk_key(payload: Dict[str, Any], point_id: Any) -> str:
         document_id = payload.get("document_id")
@@ -62,9 +59,6 @@ class HybridRetriever:
 
         return str(point_id)
 
-    # ---------------------------------------------------------
-    # Add a candidate while preventing duplicate chunks
-    # ---------------------------------------------------------
     @classmethod
     def _add_candidate(
         cls,
@@ -74,7 +68,6 @@ class HybridRetriever:
         payload_map: Dict[str, Dict[str, Any]],
         chunk_id_map: Dict[str, str],
     ) -> None:
-
         payload = hit.payload or {}
 
         chunk_key = cls._chunk_key(
@@ -82,7 +75,6 @@ class HybridRetriever:
             hit.id,
         )
 
-        # First occurrence of this actual document chunk
         if chunk_key not in chunk_id_map:
             internal_id = str(hit.id)
 
@@ -92,17 +84,12 @@ class HybridRetriever:
 
             return
 
-        # Same chunk appeared from another retrieval result.
-        # Merge its RRF score into the existing candidate.
         internal_id = chunk_id_map[chunk_key]
 
         rrf_scores[internal_id] = (
             rrf_scores.get(internal_id, 0.0) + rrf_score
         )
 
-    # ---------------------------------------------------------
-    # Main hybrid search
-    # ---------------------------------------------------------
     def search(
         self,
         query: str,
@@ -111,7 +98,6 @@ class HybridRetriever:
         candidate_limit: int = 10,
         rrf_k: int = 60,
     ) -> List[Dict[str, Any]]:
-
         if not query or not query.strip():
             return []
 
@@ -129,10 +115,6 @@ class HybridRetriever:
             ]
         )
 
-        # =====================================================
-        # 1. Dense retrieval
-        # =====================================================
-
         query_dense = self.dense_model.encode(
             query,
             normalize_embeddings=True,
@@ -147,10 +129,6 @@ class HybridRetriever:
         )
 
         dense_results = dense_response.points
-
-        # =====================================================
-        # 2. Sparse/BM25 retrieval
-        # =====================================================
 
         query_sparse = list(
             self.sparse_model.embed([query])
@@ -171,18 +149,11 @@ class HybridRetriever:
 
         sparse_results = sparse_response.points
 
-        # =====================================================
-        # 3. Reciprocal Rank Fusion
-        # =====================================================
-
         rrf_scores: Dict[str, float] = {}
-
         payload_map: Dict[str, Dict[str, Any]] = {}
-
         chunk_id_map: Dict[str, str] = {}
 
         for rank, hit in enumerate(dense_results):
-
             score = 1.0 / (
                 rrf_k + rank + 1
             )
@@ -196,7 +167,6 @@ class HybridRetriever:
             )
 
         for rank, hit in enumerate(sparse_results):
-
             score = 1.0 / (
                 rrf_k + rank + 1
             )
@@ -209,10 +179,6 @@ class HybridRetriever:
                 chunk_id_map=chunk_id_map,
             )
 
-        # =====================================================
-        # 4. Sort fused candidates
-        # =====================================================
-
         sorted_candidates = sorted(
             rrf_scores.items(),
             key=lambda item: item[1],
@@ -222,16 +188,10 @@ class HybridRetriever:
         if not sorted_candidates:
             return []
 
-        # =====================================================
-        # 5. CrossEncoder reranking
-        # =====================================================
-
         pairs = []
-
         valid_candidates = []
 
         for doc_id, rrf_score in sorted_candidates:
-
             payload = payload_map.get(doc_id)
 
             if not payload:
@@ -265,16 +225,11 @@ class HybridRetriever:
             show_progress_bar=False,
         )
 
-        # =====================================================
-        # 6. Build final results
-        # =====================================================
-
         reranked_results: List[Dict[str, Any]] = []
 
         for index, (doc_id, rrf_score) in enumerate(
             valid_candidates
         ):
-
             payload = payload_map[doc_id]
 
             rerank_score = float(
@@ -300,10 +255,6 @@ class HybridRetriever:
                     "metadata": metadata,
                 }
             )
-
-        # =====================================================
-        # 7. Final ranking
-        # =====================================================
 
         reranked_results.sort(
             key=lambda item: item["score"],

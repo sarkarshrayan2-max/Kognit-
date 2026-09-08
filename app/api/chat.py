@@ -446,6 +446,7 @@ async def chat_stream_endpoint(
                     ),
                 }
             )
+            return
 
     return StreamingResponse(
         event_generator(),
@@ -626,7 +627,6 @@ def clear_session_endpoint(
 
     db.delete(conversation)
     db.commit()
-
 
     session_manager.clear_session(
         current_user.id,
