@@ -14,13 +14,13 @@ logger = logging.getLogger("kognit.gateway")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):  
 
     logger.info("[*] Initializing KOGNIT services...")
 
     from app.core.database import init_db
 
-    init_db()
+    init_db() #Make sure the SQLAlchemy model tables exist in PostgreSQL
 
     logger.info("[+] PostgreSQL database ready.")
     logger.info("[+] Qdrant client ready.")
@@ -29,16 +29,16 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    logger.info("[-] Shutting down KOGNIT API.")
+    logger.info("[-] Shutting down KOGNIT API.")  #closing the app
 
 
 app = FastAPI(
     title="KOGNIT API Gateway",
-    version="1.0.0",
+    version="1.0.0",     #call this during backend starting 
     lifespan=lifespan,
 )
 
-
+#CORS we dont want our browser to block a request if it is from differnt origins 
 app.add_middleware(
     CORSMiddleware,
 
@@ -67,7 +67,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 
-
+#adding routers
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(doc_router)

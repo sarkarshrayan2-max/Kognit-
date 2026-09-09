@@ -15,8 +15,8 @@ DATABASE_URL = (
     f"{settings.postgres_db}"
 )
 
-
-engine = create_engine(
+#gateway to postgre
+engine = create_engine(   
     DATABASE_URL,
     pool_pre_ping=True,
     pool_size=10,
@@ -37,7 +37,7 @@ class Base(DeclarativeBase):
     pass
 
 
-def get_db() -> Generator[Session, None, None]:
+def get_db() -> Generator[Session, None, None]: #gives each request a database session
     db = SessionLocal()
 
     try:

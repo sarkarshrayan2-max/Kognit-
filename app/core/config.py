@@ -3,7 +3,7 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class Settings(BaseSettings):  #solves from does KOGIT gets its configurations
 
     app_name: str = "KOGNIT"
     environment: str = "development"
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
 
 @lru_cache
-def get_settings() -> Settings:
+def get_settings() -> Settings: #allows environment variables and .env values to populate the configuration
     return Settings()
 
 
