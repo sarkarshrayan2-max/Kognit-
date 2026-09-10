@@ -1,44 +1,322 @@
-"""
-Prompt templates for KOGNIT's Academic Teacher persona.
-Enforces high scannability, plain-English math breakdowns, 
-practical code mappings, and grounded citations.
-"""
+from typing import Any, Dict, List
 
-SYSTEM_TEACHER_PROMPT = """You are KOGNIT, an elite academic assistant and pedagogical tutor for Electronics and Computer Science (ECS) engineering students.
 
-### Operational Directives:
-1. Grounding & Anti-Hallucination:
-   - Ground your answer strictly in the provided Context Material.
-   - Do not invent hardware specs, theoretical proofs, or definitions not supported by context or core ECS principles.
-   - If the context does not contain enough information to address the query, state what is missing instead of guessing.
+def format_memories(
+    long_term_memories: List[Dict[str, Any]],
+) -> str:
+    if not long_term_memories:
+        return "No stored long-term user memories are available."
 
-2. Clean Output (No Scratchpad Leaks):
-   - Never output internal reasoning monologues, prefixes like "Here's a thinking process:", or meta-commentary.
-   - Start immediately with the first content section.
+    lines = []
 
-3. Scannable Response Architecture:
-   Use bold standalone labels to structure your explanation in this exact pedagogical sequence:
-   - **Intuitive Concept**: High-level real-world analogy explaining the core idea simply.
-   - **Formal Definition**: Technical explanation defining the concept within the course syllabus.
-   - **Comparative Breakdown**: When contrasting multiple variants or systems, use a Markdown Table.
-   - **Formula & Syntax Breakdown**: When presenting mathematical expressions, set-builder forms, or state logic:
-     a. Render formal equations using LaTeX display format ($$...$$).
-     b. Provide an annotated breakdown of every variable and operator in plain English.
-     c. Provide a practical programming equivalent (e.g., an exact SQL query, C/Python snippet, or assembly mapping) illustrating how the math translates into real code.
-   - **Citations**: List the exact document name, page numbers, or external sources used.
+    for memory in long_term_memories:
+        memory_type = memory.get("memory_type", "general")
+        value = str(memory.get("memory_value", "")).strip()
 
-4. Conversational Continuity:
-   - If the student refers back to prior questions ("explain that again", "give another example"), preserve thread context smoothly.
-"""
+        if not value:
+            continue
 
-USER_PROMPT_TEMPLATE = """Context Material:
----------------------
-{context_chunks}
----------------------
+        lines.append(f"- [{memory_type}] {value}")
 
-Chat History:
-{chat_history}
+    if not lines:
+        return "No stored long-term user memories are available."
 
-Student Question: {query}
+    return "\n".join(lines)
 
-Provide a structured, pedagogically clear response following all KOGNIT operational directives:"""
+
+def format_context(
+    retrieved_chunks: List[Dict[str, Any]],
+) -> str:
+    if not retrieved_chunks:
+        return "No reference material was retrieved."
+
+    formatted_chunks = []
+
+    for index, chunk in enumerate(retrieved_chunks, start=1):
+        metadata = chunk.get("metadata", {})
+
+        source_type = metadata.get("source_type", "course")
+        source = metadata.get("source", "Unknown source")
+        page = metadata.get("page", "?")
+        course_code = metadata.get("course_code", "Unknown")
+        url = metadata.get("url", "")
+
+        text = chunk.get("text", "").strip()
+
+        if not text:
+            continue
+
+        label = (
+            "EXTERNAL WEB SOURCE"
+            if source_type == "web"
+            else "COURSE DOCUMENT"
+        )
+
+        reference = (
+            f"REFERENCE {index}\n"
+            f"TYPE: {label}\n"
+            f"COURSE: {course_code}\n"
+            f"SOURCE: {source}\n"
+            f"PAGE: {page}\n"
+        )
+
+        if url:
+            reference += f"URL: {url}\n"
+
+        reference += f"\nCONTENT:\n{text}"
+
+        formatted_chunks.append(reference)
+
+    if not formatted_chunks:
+        return "No usable reference material was retrieved."
+
+    return "\n\n".join(formatted_chunks)
+
+
+def build_system_prompt(
+    crag_decision: str,
+) -> str:
+    decision = (crag_decision or "UNKNOWN").upper().strip()
+
+    if decision == "CORRECT":
+        source_instruction = """
+The retrieved course material is sufficiently relevant.
+
+Use the COURSE DOCUMENT material as the primary and authoritative
+source for the answer.
+
+Answer only from information supported by the course material.
+""".strip()
+
+    elif decision == "WEB_FALLBACK":
+        source_instruction = """
+The question is relevant to the selected course, but the course
+documents do not contain sufficient information.
+
+Use the provided EXTERNAL WEB SOURCES to answer the question.
+
+The external sources were selected using the active course scope.
+
+Never present external information as if it came from a course
+document.
+
+If course-document information and external information differ,
+clearly distinguish them.
+""".strip()
+
+    elif decision == "INSUFFICIENT":
+        source_instruction = """
+The question is relevant to the selected course, but the available
+course material is insufficient.
+
+Use only the provided COURSE DOCUMENT material.
+
+Do not invent missing information.
+
+If the available material cannot answer the question, explicitly state
+that the available course material is insufficient.
+""".strip()
+
+    elif decision == "NOT_FOUND":
+        source_instruction = """
+No sufficiently relevant reference material was found.
+
+Do not invent an answer.
+
+Clearly state that sufficient information was not found.
+""".strip()
+
+    elif decision == "OUT_OF_SCOPE":
+        source_instruction = """
+The question is outside the scope of the selected course.
+
+Do not answer the technical question.
+
+The application should normally handle this decision before reaching
+the LLM generation stage.
+""".strip()
+
+    elif decision == "OFF_TOPIC":
+        source_instruction = """
+The student's message is not a technical or academic question at all
+(e.g. it concerns literature, entertainment, general trivia, or another
+subject unrelated to engineering coursework).
+
+Do not answer the underlying non-technical topic.
+
+Briefly and politely note that you can only help with technical and
+academic questions for the student's courses, and invite them to ask
+one.
+
+The application should normally handle this decision before reaching
+the LLM generation stage.
+""".strip()
+
+    else:
+        source_instruction = """
+Use the provided reference material carefully.
+
+Prefer COURSE DOCUMENT material when it is relevant.
+
+Use EXTERNAL WEB SOURCES only when the routing decision explicitly
+allows external sources.
+
+Do not invent information or source attribution.
+""".strip()
+
+    return f"""
+You are KOGNIT, an academic assistant for engineering students.
+
+Your task is to answer the student's question accurately using the
+provided reference material.
+
+{source_instruction}
+
+GENERAL RULES:
+
+1. Answer the user's actual question directly.
+2. Ground factual claims in the provided references.
+3. Do not fabricate facts, citations, page numbers, URLs, or sources.
+4. Never treat an EXTERNAL WEB SOURCE as a COURSE DOCUMENT.
+5. Do not mention CRAG, retrieval, embeddings, vector databases,
+rerankers, LangGraph, or internal system details unless the student
+explicitly asks about them.
+6. If the references do not contain enough information, say so.
+7. Explain technical concepts at an engineering-student level.
+8. Use examples when they improve understanding.
+9. Use equations when appropriate.
+10. Use concise tables for comparisons when useful.
+11. Do not reproduce large portions of source material verbatim.
+12. Keep the answer focused.
+13. Do not output internal reasoning.
+14. Do not output a scratchpad.
+15. Do not output analysis or source-selection reasoning.
+16. Output only the final student-facing answer.
+17. Start immediately with the answer.
+18. Do not explain how sources were selected or ranked.
+19. Never claim that information came from a course document when the
+source is external.
+20. Never use external sources when the routing decision does not allow
+them.
+
+The current routing decision is:
+
+{decision}
+""".strip()
+
+
+def build_user_prompt(
+    query: str,
+    context: str,
+    memory_context: str,
+    crag_decision: str,
+) -> str:
+    decision = (crag_decision or "UNKNOWN").upper().strip()
+
+    return f"""
+LONG-TERM USER MEMORY
+=====================
+{memory_context}
+
+Use these memories only as personalization/context.
+Do not treat them as factual course evidence.
+Do not mention them unless they are relevant to the
+student's request.
+
+REFERENCE MATERIAL
+==================
+{context}
+
+USER QUESTION
+=============
+{query}
+
+ROUTING DECISION
+================
+{decision}
+
+SOURCE RULES
+============
+
+CORRECT:
+Use the provided course documents.
+
+WEB_FALLBACK:
+Use the provided external web sources and any useful
+course material. Do not claim external information
+came from course documents.
+
+INSUFFICIENT:
+Use the provided course material and explicitly
+acknowledge missing information when necessary.
+
+NOT_FOUND:
+Do not invent an answer.
+
+OUT_OF_SCOPE:
+Do not answer the technical question.
+
+OFF_TOPIC:
+Do not answer the non-technical topic.
+
+Return only the final answer for the student.
+
+Do not output internal reasoning, analysis,
+scratchpad content, source-selection reasoning,
+or system details.
+""".strip()
+
+
+def build_messages(
+    query: str,
+    retrieved_chunks: List[Dict[str, Any]],
+    history: List[Dict[str, str]],
+    crag_decision: str,
+    long_term_memories: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    system_prompt = build_system_prompt(crag_decision)
+
+    context = format_context(retrieved_chunks)
+
+    memory_context = format_memories(long_term_memories)
+
+    messages: List[Dict[str, str]] = [
+        {
+            "role": "system",
+            "content": system_prompt,
+        }
+    ]
+
+    for message in history[-4:]:
+        role = message.get("role")
+
+        if role not in {"user", "assistant"}:
+            continue
+
+        content = message.get("content", "").strip()
+
+        if not content:
+            continue
+
+        messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    user_message = build_user_prompt(
+        query=query,
+        context=context,
+        memory_context=memory_context,
+        crag_decision=crag_decision,
+    )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": user_message,
+        }
+    )
+
+    return messages
