@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kognit_admin -d kognit_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   redis:
@@ -20,6 +25,11 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   qdrant:
@@ -33,27 +43,51 @@ services:
     restart: unless-stopped
 
   backend:
+    image: shrayan15/kognit-backend:latest
     build:
       context: .
       dockerfile: Dockerfile
     container_name: kognit-backend
+    
+    entrypoint: ["uv", "run", "--no-sync", "python", "/app/docker/start.py"]
     ports:
       - "8000:8000"
     env_file:
       - .env
     volumes:
       - ./uploads:/app/uploads
-      - huggingface_cache:/root/.cache/huggingface 
+      - ./docker:/app/docker:ro
+      
+      - huggingface_cache:/root/.cache/huggingface
+      
     environment:
       POSTGRES_HOST: postgres
       REDIS_HOST: redis
       QDRANT_HOST: qdrant
+
+      HF_HOME: /root/.cache/huggingface
+      FASTEMBED_CACHE_PATH: /root/.cache/huggingface/fastembed   
       HF_HUB_DISABLE_XET: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "120"      
+      HF_HUB_ETAG_TIMEOUT: "60"
+      HF_TOKEN: ${HF_TOKEN:-}            
+      
     depends_on:
-      - postgres
-      - redis
-      - qdrant
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 900s   
     restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

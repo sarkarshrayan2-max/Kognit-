@@ -1,7 +1,7 @@
+from langsmith._openapi_client.types import run_select_field
+from langsmith._openapi_client.types import run_select_field
 from typing import Any, Dict, List
 
-import torch
-from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     FieldCondition,
@@ -9,19 +9,18 @@ from qdrant_client.models import (
     MatchValue,
     SparseVector,
 )
-from sentence_transformers import (
-    CrossEncoder,
-    SentenceTransformer,
-)
 
 from app.core.config import settings
+from app.services.models import (
+    get_dense_model,
+    get_reranker,
+    get_sparse_model,
+)
 
 
 class HybridRetriever:
 
     def __init__(self):
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-
         self.client = QdrantClient(
             host=settings.qdrant_host,
             port=settings.qdrant_port,
@@ -29,19 +28,10 @@ class HybridRetriever:
 
         self.collection_name = settings.qdrant_collection
 
-        self.dense_model = SentenceTransformer(
-            settings.dense_model,
-            device=device,
-        )
-
-        self.sparse_model = SparseTextEmbedding(
-            model_name=settings.sparse_model,
-        )
-
-        self.reranker = CrossEncoder(
-            settings.reranker_model,
-            device=device,
-        )
+        
+        self.dense_model = get_dense_model()
+        self.sparse_model = get_sparse_model()
+        self.reranker = get_reranker()
 
     @staticmethod
     def _chunk_key(payload: Dict[str, Any], point_id: Any) -> str:

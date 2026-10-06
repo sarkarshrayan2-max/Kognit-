@@ -1,12 +1,14 @@
 import hashlib
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import uuid
 
 import pymupdf
-from fastembed import SparseTextEmbedding
 from qdrant_client import QdrantClient
+from app.core.config import settings
+from app.services.models import get_dense_model, get_sparse_model
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -19,15 +21,14 @@ from qdrant_client.models import (
     SparseVectorParams,
     VectorParams,
 )
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL = "http://qdrant:6333"
-COLLECTION_NAME = "ecs_knowledge_base"
+QDRANT_URL = f"http://{settings.qdrant_host}:{settings.qdrant_port}"
+COLLECTION_NAME = settings.qdrant_collection
 
-DENSE_MODEL_NAME = "BAAI/bge-large-en-v1.5"
-SPARSE_MODEL_NAME = "Qdrant/bm25"
+DENSE_MODEL_NAME = settings.dense_model
+SPARSE_MODEL_NAME = settings.sparse_model
 
 EMBEDDING_VERSION = "v1"
 CHUNKING_VERSION = "v1"
@@ -83,13 +84,8 @@ class DocumentIndexer:
 
         self.collection_name = collection_name
 
-        self.dense_model = SentenceTransformer(
-            DENSE_MODEL_NAME
-        )
-
-        self.sparse_model = SparseTextEmbedding(
-            model_name=SPARSE_MODEL_NAME
-        )
+        self.dense_model = get_dense_model()
+        self.sparse_model = get_sparse_model()
 
         self._ensure_collection()
 
@@ -110,7 +106,7 @@ class DocumentIndexer:
 
         dense_dimension = (
             self.dense_model
-            .get_sentence_embedding_dimension()
+            .get_embedding_dimension()
         )
 
         self.client.create_collection(
@@ -565,4 +561,18 @@ class DocumentIndexer:
         }
 
 
-indexer = None 
+class _LazyIndexer:
+    _instance: Optional[DocumentIndexer] = None
+    _lock = threading.Lock()
+
+    def _get(self) -> DocumentIndexer:
+        if self._instance is None:
+            with self._lock:
+                if self._instance is None:
+                    self._instance = DocumentIndexer()
+        return self._instance
+
+    def __getattr__(self, name: str):
+        return getattr(self._get(), name)
+
+indexer = _LazyIndexer()
