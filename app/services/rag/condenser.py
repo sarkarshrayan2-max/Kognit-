@@ -163,7 +163,7 @@ class QueryCondenser:
 
     def __init__(
         self,
-        model_name: str = "qwen/qwen3.6-27b",
+        model_name: str = "qwen/qwen3.8-27b",
     ):
         api_key = os.getenv("GROQ_API_KEY")
 

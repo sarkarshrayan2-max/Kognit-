@@ -30,7 +30,7 @@ class Settings(BaseSettings):  #solves from does KOGIT gets its configurations
 
     groq_api_key: str | None = None
 
-    groq_model: str = "qwen/qwen3.6-27b"
+    groq_model: str = "qwen/qwen3.8-27b"
 
     tavily_api_key: str | None = None
 

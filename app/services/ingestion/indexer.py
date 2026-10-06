@@ -23,7 +23,7 @@ from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL = "http://localhost:6333"
+QDRANT_URL = "http://qdrant:6333"
 COLLECTION_NAME = "ecs_knowledge_base"
 
 DENSE_MODEL_NAME = "BAAI/bge-large-en-v1.5"

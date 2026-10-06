@@ -21,10 +21,6 @@ COURSE_DOMAIN_MAP = {
     "IOT": "Internet of Things and Embedded Systems",
 }
 
-# Generic terms that appear across many course domains and therefore should
-# never, by themselves, be treated as strong evidence that a retrieved chunk
-# is actually relevant to the student's question. ("protocol", "system",
-# "device" etc. show up in DBMS, OS, IoT, EMT material alike.)
 GENERIC_STOPWORDS = {
     "the", "a", "an", "is", "are", "was", "were", "of", "in", "on", "for",
     "to", "and", "or", "what", "why", "how", "does", "do", "did", "that",
@@ -84,12 +80,7 @@ class CRAGEvaluator:
         self.high_threshold = high_threshold
         self.low_threshold = low_threshold
 
-        # A chunk scoring between `strong_semantic_threshold` and
-        # `high_threshold` is not auto-accepted on its own, but if enough
-        # chunks independently clear it *and* share real vocabulary with the
-        # query, that corroboration is treated as strong evidence too. This
-        # effectively lowers the bar for genuinely strong semantic matches
-        # without opening the door to single lucky embeddings.
+        
         self.strong_semantic_threshold = strong_semantic_threshold
         self.min_lexical_overlap = min_lexical_overlap
         self.min_corroborating_chunks = min_corroborating_chunks
@@ -106,7 +97,7 @@ class CRAGEvaluator:
 
         self.model_name = os.getenv(
             "GROQ_MODEL",
-            "qwen/qwen3.6-27b",
+            "qwen/qwen3.8-27b",
         )
 
     @staticmethod
@@ -210,8 +201,7 @@ class CRAGEvaluator:
         query_keywords = self._keywords(query)
 
         if not query_keywords:
-            # Nothing meaningful to compare against — don't let this
-            # silently count as strong evidence.
+            
             return 0.0
 
         chunk_keywords = self._keywords(chunk_text)
